@@ -1,0 +1,6 @@
+You need to install these for the code to work:
+streamlit
+pandas
+plotly
+openpyxl
+xlsxwriter
