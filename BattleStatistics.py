@@ -80,9 +80,12 @@ if uploaded_file is not None:
         st.caption("These statistics apply only to the selected week.")
         
         # --- A. STATS & CHART ---
+        
+        # AJUSTE 1: Añadimos 'Result' a la agregación para obtener Victoria/Derrota
         base_stats = df_week_filtered.groupby('Legion').agg(
             Total_Players=('Joueur', 'nunique'),
-            Total_Score=('Score', 'sum')
+            Total_Score=('Score', 'sum'),
+            Result=('Result', lambda x: x.mode().iloc[0] if not x.mode().empty else "N/A")
         )
 
         status_counts = df_week_filtered.groupby(['Legion', 'Status']).size().unstack(fill_value=0)
@@ -93,26 +96,40 @@ if uploaded_file is not None:
             
         final_summary_table = base_stats.join(status_counts[['Active', 'Inactive']]).reset_index()
 
+        # AJUSTE 2: Calcular Porcentaje de Participación
+        final_summary_table['Participation_Rate'] = (final_summary_table['Active'] / final_summary_table['Total_Players']) * 100
+
         # Add Total Row
+        # Nota: El Total de participación se recalcula basado en los totales, no en el promedio
+        total_active = final_summary_table['Active'].sum()
+        total_players_sum = final_summary_table['Total_Players'].sum()
+        total_participation_rate = (total_active / total_players_sum * 100) if total_players_sum > 0 else 0
+
         total_row = pd.DataFrame({
             'Legion': ['TOTAL'],
-            'Total_Players': [final_summary_table['Total_Players'].sum()],
+            'Total_Players': [total_players_sum],
             'Total_Score': [final_summary_table['Total_Score'].sum()],
-            'Active': [final_summary_table['Active'].sum()],
-            'Inactive': [final_summary_table['Inactive'].sum()]
+            'Result': ['-'], # No aplica resultado para el total
+            'Active': [total_active],
+            'Inactive': [final_summary_table['Inactive'].sum()],
+            'Participation_Rate': [total_participation_rate]
         })
         final_summary_table = pd.concat([final_summary_table, total_row], ignore_index=True)
 
-        col1, col2 = st.columns([1, 2])
+        col1, col2 = st.columns([1.5, 2]) # Ajusté un poco el ancho para que quepan las columnas nuevas
         
         with col1:
             st.subheader("Stats by Legion")
             st.dataframe(
                 final_summary_table.style.format({
                     'Total_Score': lambda x: f"{x:,.0f}".replace(",", " "),
-                    'Total_Players': '{:.0f}', 'Active': '{:.0f}', 'Inactive': '{:.0f}'
+                    'Total_Players': '{:.0f}', 
+                    'Active': '{:.0f}', 
+                    'Inactive': '{:.0f}',
+                    'Participation_Rate': '{:.1f}%' # Formato porcentaje
                 }), 
-                use_container_width=True
+                use_container_width=True,
+                column_order=['Legion', 'Result', 'Total_Players', 'Total_Score', 'Active', 'Inactive', 'Participation_Rate'] # Reordenar columnas
             )
 
         with col2:
