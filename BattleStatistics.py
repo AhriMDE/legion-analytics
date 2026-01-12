@@ -187,32 +187,33 @@ if uploaded_file is not None:
             st.markdown("💤 **Inactive Players**")
             st.dataframe(df_inactive, use_container_width=True, hide_index=True)
 
-        # ==========================================
-        # NUEVO: 2. LEGION SEASON PERFORMANCE (GLOBAL)
+# ==========================================
+        # NUEVO: 2. SEASON PERFORMANCE BY SCHEDULE (GLOBAL)
         # ==========================================
         st.divider()
-        st.header("2. Legion Season Performance (Global)")
-        st.markdown("Analysis of **Win Rates** across the entire season. *Note: Data is aggregated by Match, not by individual player entries.*")
+        st.header("2. Season Performance by Schedule (Global)")
+        st.markdown("Analysis of **Win Rates** across different time slots. *Note: Data is aggregated by Match.*")
 
-        # 1. Preparar datos de PARTIDAS ÚNICAS (para no contar 30 victorias si jugaron 30 jugadores en una misma partida)
+        # 1. Preparar datos de PARTIDAS ÚNICAS
         match_level_df = df[['Date', 'Legion', 'Heure', 'Is_Win']].drop_duplicates()
 
         col_season_1, col_season_2 = st.columns([1, 1])
 
         with col_season_1:
-            st.subheader("🏆 General Winrate by Legion")
-            legion_season_stats = match_level_df.groupby('Legion').agg(
+            st.subheader("🏆 Winrate by Schedule")
+            # CAMBIO PRINCIPAL: Agrupar por 'Heure' en vez de 'Legion'
+            time_season_stats = match_level_df.groupby('Heure').agg(
                 Matches_Played=('Is_Win', 'count'),
                 Wins=('Is_Win', 'sum')
             ).reset_index()
             
-            legion_season_stats['Win_Rate'] = (legion_season_stats['Wins'] / legion_season_stats['Matches_Played']) * 100
+            time_season_stats['Win_Rate'] = (time_season_stats['Wins'] / time_season_stats['Matches_Played']) * 100
             
-            # Ordenar por Win Rate
-            legion_season_stats = legion_season_stats.sort_values('Win_Rate', ascending=False)
+            # Ordenar por Win Rate (Los mejores horarios primero)
+            time_season_stats = time_season_stats.sort_values('Win_Rate', ascending=False)
 
             st.dataframe(
-                legion_season_stats.style.format({
+                time_season_stats.style.format({
                     'Win_Rate': '{:.1f}%',
                     'Matches_Played': '{:.0f}',
                     'Wins': '{:.0f}'
@@ -222,34 +223,35 @@ if uploaded_file is not None:
             )
 
         with col_season_2:
-            st.subheader("📊 Winrate Distribution")
+            st.subheader("📊 Schedule Efficiency")
             fig_winrate = px.bar(
-                legion_season_stats, x='Legion', y='Win_Rate',
-                title="Win Rate Percentage per Legion",
+                time_season_stats, x='Heure', y='Win_Rate',
+                title="Win Rate Percentage per Hour",
                 color='Win_Rate',
                 color_continuous_scale='RdYlGn',
                 range_y=[0, 100],
-                text_auto='.1f'
+                text_auto='.1f',
+                labels={'Heure': 'Schedule (Time)'}
             )
             fig_winrate.update_layout(coloraxis_showscale=False)
             st.plotly_chart(fig_winrate, use_container_width=True)
 
-        # --- WINRATE POR HORARIO (Matriz) ---
-        st.subheader("🕰️ Winrate by Schedule Matrix (Legion vs Time)")
-        st.caption("Percentage of victories for each Legion at specific times.")
+        # --- WINRATE POR LEGION (Matriz) ---
+        # Mantenemos esta matriz porque es muy útil para ver el detalle cruzado
+        st.subheader("🕰️ Detailed Matrix: Winrate by Legion & Time")
+        st.caption("Percentage of victories breakdown.")
         
-        # Pivot table usando match_level_df
         schedule_winrate = match_level_df.pivot_table(
             index='Legion', columns='Heure', values='Is_Win', aggfunc='mean'
         ) * 100
 
         st.dataframe(
             schedule_winrate.style.format('{:.1f}%')
-            .background_gradient(cmap='RdYlGn', vmin=0, vmax=100, axis=None) # Axis=None colorea toda la tabla como un mapa de calor
+            .background_gradient(cmap='RdYlGn', vmin=0, vmax=100, axis=None)
             .highlight_null(color='lightgrey'),
             use_container_width=True
         )
-
+        
         # ==========================================
         # 3. INDIVIDUAL PLAYER SUMMARY (GLOBAL)
         # ==========================================
@@ -356,3 +358,4 @@ if uploaded_file is not None:
 
 else:
     st.info("Please upload an Excel file in the sidebar to begin.")
+
