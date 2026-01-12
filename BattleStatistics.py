@@ -187,8 +187,8 @@ if uploaded_file is not None:
             st.markdown("💤 **Inactive Players**")
             st.dataframe(df_inactive, use_container_width=True, hide_index=True)
 
-# ==========================================
-        # NUEVO: 2. SEASON PERFORMANCE BY SCHEDULE (GLOBAL)
+        # ==========================================
+        # 2. SEASON PERFORMANCE BY SCHEDULE (GLOBAL)
         # ==========================================
         st.divider()
         st.header("2. Season Performance by Schedule (Global)")
@@ -199,17 +199,15 @@ if uploaded_file is not None:
 
         col_season_1, col_season_2 = st.columns([1, 1])
 
+        # Variable cambiada: time_season_stats (antes era legion_season_stats)
         with col_season_1:
             st.subheader("🏆 Winrate by Schedule")
-            # CAMBIO PRINCIPAL: Agrupar por 'Heure' en vez de 'Legion'
             time_season_stats = match_level_df.groupby('Heure').agg(
                 Matches_Played=('Is_Win', 'count'),
                 Wins=('Is_Win', 'sum')
             ).reset_index()
             
             time_season_stats['Win_Rate'] = (time_season_stats['Wins'] / time_season_stats['Matches_Played']) * 100
-            
-            # Ordenar por Win Rate (Los mejores horarios primero)
             time_season_stats = time_season_stats.sort_values('Win_Rate', ascending=False)
 
             st.dataframe(
@@ -237,7 +235,6 @@ if uploaded_file is not None:
             st.plotly_chart(fig_winrate, use_container_width=True)
 
         # --- WINRATE POR LEGION (Matriz) ---
-        # Mantenemos esta matriz porque es muy útil para ver el detalle cruzado
         st.subheader("🕰️ Detailed Matrix: Winrate by Legion & Time")
         st.caption("Percentage of victories breakdown.")
         
@@ -251,7 +248,7 @@ if uploaded_file is not None:
             .highlight_null(color='lightgrey'),
             use_container_width=True
         )
-        
+
         # ==========================================
         # 3. INDIVIDUAL PLAYER SUMMARY (GLOBAL)
         # ==========================================
@@ -337,9 +334,10 @@ if uploaded_file is not None:
         )
 
         # --- 2. GLOBAL REPORT ---
+        # CORRECCIÓN AQUÍ: Usamos time_season_stats en vez de legion_season_stats
         buffer_global = io.BytesIO()
         with pd.ExcelWriter(buffer_global, engine='xlsxwriter') as writer:
-            legion_season_stats.to_excel(writer, sheet_name='Legion_Winrates', index=False)
+            time_season_stats.to_excel(writer, sheet_name='Schedule_Winrates', index=False) # <--- CORREGIDO
             schedule_winrate.to_excel(writer, sheet_name='Winrate_by_Time')
             player_stats.to_excel(writer, sheet_name='Global_Stats', index=False)
             schedule_pivot.to_excel(writer, sheet_name='Schedule_Matrix')
@@ -358,4 +356,3 @@ if uploaded_file is not None:
 
 else:
     st.info("Please upload an Excel file in the sidebar to begin.")
-
