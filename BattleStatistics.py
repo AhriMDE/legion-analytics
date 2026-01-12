@@ -14,7 +14,7 @@ st.sidebar.markdown("Upload file and select week to filter.")
 
 # Main Title
 st.title("📊 Legion & Player Activity Report")
-st.markdown("Select a week in the sidebar to filter the **Legion Summary**. The **Player Activity** section shows global history.")
+st.markdown("Select a week in the sidebar to filter the **Legion Summary**. The **Global Sections** analyze the full season.")
 
 # ==========================================
 # 1. FILE UPLOADER (SIDEBAR)
@@ -61,8 +61,11 @@ if uploaded_file is not None:
             df['Score'] = df['Score'].astype(str).str.replace(',', '').str.replace('.', '')
         df['Score'] = pd.to_numeric(df['Score'], errors='coerce').fillna(0)
 
-        # 4. Define Status
+        # 4. Define Status & Win Helper
         df['Status'] = df['Score'].apply(lambda x: 'Active' if x > 0 else 'Inactive')
+        
+        # Helper column for calculations (1 = Win, 0 = Loss/Draw)
+        df['Is_Win'] = df['Result'].astype(str).apply(lambda x: 1 if 'Victory' in x else 0)
 
         # ==========================================
         # --- WEEK SELECTOR (SIDEBAR) ---
@@ -80,27 +83,22 @@ if uploaded_file is not None:
         st.caption("These statistics apply only to the selected week.")
         
         # --- A. STATS & CHART ---
-        
-        # AJUSTE 1: Añadimos 'Result' a la agregación para obtener Victoria/Derrota
         base_stats = df_week_filtered.groupby('Legion').agg(
             Total_Players=('Joueur', 'nunique'),
             Total_Score=('Score', 'sum'),
-            Result=('Result', lambda x: x.mode().iloc[0] if not x.mode().empty else "N/A")
+            Result=('Result', lambda x: x.mode().iloc[0] if not x.mode().empty else "N/A"),
+            Schedule=('Heure', lambda x: x.mode().iloc[0] if not x.mode().empty else "N/A")
         )
 
         status_counts = df_week_filtered.groupby(['Legion', 'Status']).size().unstack(fill_value=0)
         
-        # Ensure cols exist
         if 'Active' not in status_counts.columns: status_counts['Active'] = 0
         if 'Inactive' not in status_counts.columns: status_counts['Inactive'] = 0
             
         final_summary_table = base_stats.join(status_counts[['Active', 'Inactive']]).reset_index()
-
-        # AJUSTE 2: Calcular Porcentaje de Participación
         final_summary_table['Participation_Rate'] = (final_summary_table['Active'] / final_summary_table['Total_Players']) * 100
 
         # Add Total Row
-        # Nota: El Total de participación se recalcula basado en los totales, no en el promedio
         total_active = final_summary_table['Active'].sum()
         total_players_sum = final_summary_table['Total_Players'].sum()
         total_participation_rate = (total_active / total_players_sum * 100) if total_players_sum > 0 else 0
@@ -109,27 +107,25 @@ if uploaded_file is not None:
             'Legion': ['TOTAL'],
             'Total_Players': [total_players_sum],
             'Total_Score': [final_summary_table['Total_Score'].sum()],
-            'Result': ['-'], # No aplica resultado para el total
+            'Result': ['-'], 'Schedule': ['-'],
             'Active': [total_active],
             'Inactive': [final_summary_table['Inactive'].sum()],
             'Participation_Rate': [total_participation_rate]
         })
         final_summary_table = pd.concat([final_summary_table, total_row], ignore_index=True)
 
-        col1, col2 = st.columns([1.5, 2]) # Ajusté un poco el ancho para que quepan las columnas nuevas
+        col1, col2 = st.columns([1.5, 2])
         
         with col1:
             st.subheader("Stats by Legion")
             st.dataframe(
                 final_summary_table.style.format({
                     'Total_Score': lambda x: f"{x:,.0f}".replace(",", " "),
-                    'Total_Players': '{:.0f}', 
-                    'Active': '{:.0f}', 
-                    'Inactive': '{:.0f}',
-                    'Participation_Rate': '{:.1f}%' # Formato porcentaje
+                    'Total_Players': '{:.0f}', 'Active': '{:.0f}', 'Inactive': '{:.0f}',
+                    'Participation_Rate': '{:.1f}%'
                 }), 
                 use_container_width=True,
-                column_order=['Legion', 'Result', 'Total_Players', 'Total_Score', 'Active', 'Inactive', 'Participation_Rate'] # Reordenar columnas
+                column_order=['Legion', 'Schedule', 'Result', 'Total_Players', 'Total_Score', 'Active', 'Inactive', 'Participation_Rate'] 
             )
 
         with col2:
@@ -192,13 +188,76 @@ if uploaded_file is not None:
             st.dataframe(df_inactive, use_container_width=True, hide_index=True)
 
         # ==========================================
+        # NUEVO: 2. LEGION SEASON PERFORMANCE (GLOBAL)
+        # ==========================================
+        st.divider()
+        st.header("2. Legion Season Performance (Global)")
+        st.markdown("Analysis of **Win Rates** across the entire season. *Note: Data is aggregated by Match, not by individual player entries.*")
+
+        # 1. Preparar datos de PARTIDAS ÚNICAS (para no contar 30 victorias si jugaron 30 jugadores en una misma partida)
+        match_level_df = df[['Date', 'Legion', 'Heure', 'Is_Win']].drop_duplicates()
+
+        col_season_1, col_season_2 = st.columns([1, 1])
+
+        with col_season_1:
+            st.subheader("🏆 General Winrate by Legion")
+            legion_season_stats = match_level_df.groupby('Legion').agg(
+                Matches_Played=('Is_Win', 'count'),
+                Wins=('Is_Win', 'sum')
+            ).reset_index()
+            
+            legion_season_stats['Win_Rate'] = (legion_season_stats['Wins'] / legion_season_stats['Matches_Played']) * 100
+            
+            # Ordenar por Win Rate
+            legion_season_stats = legion_season_stats.sort_values('Win_Rate', ascending=False)
+
+            st.dataframe(
+                legion_season_stats.style.format({
+                    'Win_Rate': '{:.1f}%',
+                    'Matches_Played': '{:.0f}',
+                    'Wins': '{:.0f}'
+                }).background_gradient(subset=['Win_Rate'], cmap='RdYlGn', vmin=0, vmax=100),
+                use_container_width=True,
+                hide_index=True
+            )
+
+        with col_season_2:
+            st.subheader("📊 Winrate Distribution")
+            fig_winrate = px.bar(
+                legion_season_stats, x='Legion', y='Win_Rate',
+                title="Win Rate Percentage per Legion",
+                color='Win_Rate',
+                color_continuous_scale='RdYlGn',
+                range_y=[0, 100],
+                text_auto='.1f'
+            )
+            fig_winrate.update_layout(coloraxis_showscale=False)
+            st.plotly_chart(fig_winrate, use_container_width=True)
+
+        # --- WINRATE POR HORARIO (Matriz) ---
+        st.subheader("🕰️ Winrate by Schedule Matrix (Legion vs Time)")
+        st.caption("Percentage of victories for each Legion at specific times.")
+        
+        # Pivot table usando match_level_df
+        schedule_winrate = match_level_df.pivot_table(
+            index='Legion', columns='Heure', values='Is_Win', aggfunc='mean'
+        ) * 100
+
+        st.dataframe(
+            schedule_winrate.style.format('{:.1f}%')
+            .background_gradient(cmap='RdYlGn', vmin=0, vmax=100, axis=None) # Axis=None colorea toda la tabla como un mapa de calor
+            .highlight_null(color='lightgrey'),
+            use_container_width=True
+        )
+
+        # ==========================================
         # 3. INDIVIDUAL PLAYER SUMMARY (GLOBAL)
         # ==========================================
         st.divider()
-        st.header("2. Individual Player Activity (Global History)")
+        st.header("3. Individual Player Activity (Global History)")
         st.caption("These statistics are cumulative (All Time).")
 
-        def calculate_win_rate(series):
+        def calculate_win_rate_player(series):
             wins = series.apply(lambda x: 1 if 'Victory' in str(x) else 0).sum()
             total = len(series)
             return round((wins / total) * 100, 2) if total > 0 else 0
@@ -208,7 +267,7 @@ if uploaded_file is not None:
         player_stats = df.groupby('Joueur').agg(
             Total_Score=('Score', 'sum'),
             Average_Score=('Score', 'mean'),
-            Win_Rate=('Result', calculate_win_rate),
+            Win_Rate=('Result', calculate_win_rate_player),
             Participations=('Score', lambda x: (x > 0).sum()),
             Absences=('Score', lambda x: (x == 0).sum()),
             Preferred_Schedule=('Heure', get_preferred_schedule)
@@ -246,10 +305,10 @@ if uploaded_file is not None:
         st.dataframe(schedule_pivot, use_container_width=True)
 
         # ==========================================
-        # 4. RAW DATA SECTION (RESTORED)
+        # 4. RAW DATA SECTION
         # ==========================================
         st.divider()
-        st.header("3. Raw Data")
+        st.header("4. Raw Data")
         with st.expander("📂 Click to see raw data from Excel"):
             st.dataframe(df)
 
@@ -259,7 +318,7 @@ if uploaded_file is not None:
         st.sidebar.divider()
         st.sidebar.header("📥 Download Reports")
         
-        # --- 1. WEEKLY REPORT (BUFFER) ---
+        # --- 1. WEEKLY REPORT ---
         buffer_week = io.BytesIO()
         with pd.ExcelWriter(buffer_week, engine='xlsxwriter') as writer:
             final_summary_table.to_excel(writer, sheet_name='Summary', index=False)
@@ -275,14 +334,14 @@ if uploaded_file is not None:
             mime="application/vnd.ms-excel"
         )
 
-        # --- 2. GLOBAL REPORT (BUFFER) ---
+        # --- 2. GLOBAL REPORT ---
         buffer_global = io.BytesIO()
         with pd.ExcelWriter(buffer_global, engine='xlsxwriter') as writer:
-            # Stats Globales
+            legion_season_stats.to_excel(writer, sheet_name='Legion_Winrates', index=False)
+            schedule_winrate.to_excel(writer, sheet_name='Winrate_by_Time')
             player_stats.to_excel(writer, sheet_name='Global_Stats', index=False)
             schedule_pivot.to_excel(writer, sheet_name='Schedule_Matrix')
             global_hourly_stats.to_excel(writer, sheet_name='Global_Hourly', index=False)
-            # Todo el historial
             df.to_excel(writer, sheet_name='Full_History_Raw', index=False)
 
         st.sidebar.download_button(
@@ -297,4 +356,3 @@ if uploaded_file is not None:
 
 else:
     st.info("Please upload an Excel file in the sidebar to begin.")
-    
