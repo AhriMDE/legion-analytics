@@ -7,17 +7,17 @@ import re
 # ==========================================
 # PAGE CONFIGURATION
 # ==========================================
-st.set_page_config(page_title="BOD Analytics - Multi Alliance", layout="wide")
+st.set_page_config(page_title="BOD Activity Tracker", layout="wide")
 
 st.sidebar.title("🛡️ BOD Control Panel")
-st.title("📊 Battle of Dawn (BOD) Report")
-st.markdown("Advanced analytics for multiple alliances based on the simplified log format.")
+st.title("📊 Battle of Dawn (BOD) Activity Report")
+st.markdown("Simplified tracking focused on player scores and alliance activity.")
 
 # ==========================================
-# 1. PROCESSING FUNCTION (SIMPLIFIED LOGIC)
+# 1. PROCESSING FUNCTION (FIXED COLUMN MAPPING)
 # ==========================================
 def process_bod_file(uploaded_file):
-    # Read the entire "BOD" sheet without headers
+    # Read the entire "BOD" sheet
     raw_df = pd.read_excel(uploaded_file, sheet_name="BOD", header=None)
     
     all_data = []
@@ -26,67 +26,76 @@ def process_bod_file(uploaded_file):
     current_schedule = None
     expecting_alliance = False
     
-    # Matches exactly "YYYY/MM/DD-YYYY/MM/DD"
+    # Matches YYYY/MM/DD-YYYY/MM/DD
     date_range_pattern = r"(\d{4}/\d{1,2}/\d{1,2}-\d{4}/\d{1,2}/\d{1,2})"
 
     for i, row in raw_df.iterrows():
-        # Convert row to string to search
-        row_str = " ".join([str(val) for val in row if pd.notna(val)]).strip()
+        # Clean values to handle NaNs and spaces
+        cells = [str(val).strip() for val in row]
+        row_str = " ".join([c for c in cells if c != "nan"]).strip()
         
-        # Skip completely empty rows
         if not row_str:
             continue
 
-        # 1. If we found the date range in the previous step, this row is the Alliance
-        if expecting_alliance:
-            first_val = [str(val) for val in row if pd.notna(val)][0]
-            current_alliance = str(first_val).strip()
-            expecting_alliance = False
-            continue
-
-        # 2. Check for Date Range
+        # 1. Detect Date Range
         dr_match = re.search(date_range_pattern, row_str)
         if dr_match:
             current_date_range = dr_match.group(1)
-            expecting_alliance = True # The next row will contain the alliance name
-            current_schedule = None   # Reset schedule for the new block
+            expecting_alliance = True
+            current_schedule = None
             continue
-            
-        # 3. Check for Schedule (e.g., "10 May 1 UTC")
+
+        # 2. Detect Alliance (row below date)
+        if expecting_alliance:
+            for c in cells:
+                if c != "nan" and c != "":
+                    current_alliance = c
+                    break
+            expecting_alliance = False
+            continue
+
+        # 3. Detect Schedule (cell containing UTC)
         if "UTC" in row_str.upper():
-            # Find the exact cell with UTC to avoid extra blank spaces
-            for val in row:
-                if pd.notna(val) and "UTC" in str(val).upper():
-                    current_schedule = str(val).strip()
+            for c in cells:
+                if "UTC" in c.upper():
+                    current_schedule = c
                     break
             continue
         
-        # 4. Extract Data Rows
-        # We assume data columns: 0:Date, 1:Hour, 2:Player, 3:Score, 4:Result, 5:Legion
-        if current_alliance and len(row) > 5:
-            col_date = str(row[0]).strip()
-            col_player = str(row[2]).strip()
-            col_legion = str(row[5]).strip()
-            
-            # Check if it's a real data row (Date column starts with a number, Player is not empty)
-            if col_date[0:1].isdigit() and pd.notna(row[2]) and col_player != "" and col_player.lower() != "joueur":
+        # 4. Skip Header Row (Rank, Player, Score, Legion)
+        if cells[0].lower() == "rank" or cells[1].lower() == "player":
+            continue
+        
+        # 5. Extract Data Rows
+        # Mapping: 0:Rank, 1:Player, 2:Score, 3:Legion
+        if current_alliance and len(cells) >= 4:
+            rank_val = cells[0]
+            player_name = cells[1]
+            score_raw = cells[2]
+            legion_val = cells[3]
+
+            # Verify if it's a numeric data row (Rank is a number)
+            if rank_val.isdigit() and player_name != "nan" and player_name != "":
                 
-                # Use the UTC schedule if found, otherwise fallback to the row's hour column
-                final_hour = current_schedule if current_schedule else str(row[1])
+                # Clean Score (handle spaces like "644 645")
+                try:
+                    clean_score = score_raw.replace(" ", "").replace(",", "")
+                    score = pd.to_numeric(clean_score, errors='coerce')
+                except:
+                    score = 0
 
                 data_row = {
                     'Alliance': current_alliance,
                     'Date_Range': current_date_range,
-                    'Date': col_date[:10],
-                    'Hour': final_hour,     
-                    'Player': col_player,   
-                    'Score': row[3],
-                    'Result': str(row[4]),
-                    'Legion': col_legion
+                    'Schedule': current_schedule if current_schedule else "TBD",
+                    'Rank': int(rank_val),
+                    'Player': player_name,
+                    'Score': score if not pd.isna(score) else 0,
+                    'Legion': legion_val
                 }
                 all_data.append(data_row)
 
-    cols = ['Alliance', 'Date_Range', 'Date', 'Hour', 'Player', 'Score', 'Result', 'Legion']
+    cols = ['Alliance', 'Date_Range', 'Schedule', 'Rank', 'Player', 'Score', 'Legion']
     return pd.DataFrame(all_data, columns=cols)
 
 # ==========================================
@@ -99,30 +108,11 @@ if uploaded_file is not None:
         df = process_bod_file(uploaded_file)
         
         if df.empty:
-            st.error("⚠️ No data could be extracted. Check your format: Date range in one cell, Alliance directly below it.")
+            st.error("⚠️ No data could be extracted. Please check the Rank and Player columns.")
             st.stop()
 
-        # --- ADDITIONAL CLEANING ---
-        def clean_hour(val):
-            val_str = str(val).strip()
-            if 'UTC' in val_str.upper():
-                return val_str # Keeps "10 May 1 UTC" intact
-            if 'H' in val_str.upper():
-                num = ''.join(filter(str.isdigit, val_str))
-                if num:
-                    return f"{int(num):02d}:00"
-            return val_str
-            
-        df['Hour'] = df['Hour'].apply(clean_hour)
-        
-        # Clean Score
-        if df['Score'].dtype == 'object':
-            df['Score'] = df['Score'].astype(str).str.replace(',', '').str.replace('.', '')
-        df['Score'] = pd.to_numeric(df['Score'], errors='coerce').fillna(0)
-        
-        # Define Status and Is_Win helper
+        # Status definition based purely on activity (Score > 0)
         df['Status'] = df['Score'].apply(lambda x: 'Active' if x > 0 else 'Inactive')
-        df['Is_Win'] = df['Result'].astype(str).apply(lambda x: 1 if 'Victory' in x.strip() else 0)
 
         # Sidebar Filters
         alliances = sorted(df['Alliance'].unique())
@@ -134,97 +124,79 @@ if uploaded_file is not None:
         # Apply Filters
         df_filtered = df[(df['Alliance'].isin(sel_alliances)) & (df['Date_Range'] == sel_range)]
 
-        # --- SAFETY NETS ---
-        summary = pd.DataFrame()
-        p_stats = pd.DataFrame()
-
         # ==========================================
-        # SECTION 1: EVENT SUMMARY
+        # SECTION 1: ACTIVITY SUMMARY
         # ==========================================
-        st.header(f"1. Battle Summary: {sel_range}")
+        st.header(f"1. Alliance Activity: {sel_range}")
         
         if not df_filtered.empty:
+            # Stats by Alliance and Legion
             summary = df_filtered.groupby(['Alliance', 'Legion']).agg(
-                Players=('Player', 'nunique'),
+                Total_Players=('Player', 'nunique'),
                 Total_Score=('Score', 'sum'),
-                Result=('Result', lambda x: x.mode().iloc[0] if not x.mode().empty else "-"),
-                Schedule=('Hour', lambda x: x.mode().iloc[0] if not x.mode().empty else "-")
+                Preferred_Time=('Schedule', lambda x: x.mode().iloc[0] if not x.mode().empty else "-")
             ).reset_index()
 
+            # Calculate Active count
             active_counts = df_filtered[df_filtered['Status'] == 'Active'].groupby(['Alliance', 'Legion']).size().reset_index(name='Active_Players')
             summary = summary.merge(active_counts, on=['Alliance', 'Legion'], how='left').fillna(0)
-            summary['% Part.'] = (summary['Active_Players'] / summary['Players']) * 100
+            summary['Participation %'] = (summary['Active_Players'] / summary['Total_Players']) * 100
 
             st.dataframe(
-                summary.style.format({'Total_Score': '{:,.0f}', '% Part.': '{:.1f}%'})
-                .background_gradient(subset=['% Part.'], cmap='RdYlGn'),
+                summary.style.format({'Total_Score': '{:,.0f}', 'Participation %': '{:.1f}%'}),
                 use_container_width=True, hide_index=True
             )
 
+            # Charts
             col1, col2 = st.columns(2)
             with col1:
-                st.subheader("👥 Participation by Alliance")
+                st.subheader("👥 Active Players by Legion")
                 fig_p = px.bar(summary, x="Legion", y="Active_Players", color="Alliance", barmode="group", text_auto=True)
                 st.plotly_chart(fig_p, use_container_width=True)
             with col2:
-                st.subheader("🔥 Top Scores by Alliance")
+                st.subheader("🔥 Score Contribution")
                 fig_s = px.pie(summary, values='Total_Score', names='Alliance', hole=.4)
                 st.plotly_chart(fig_s, use_container_width=True)
         else:
-            st.warning("No data found for the selected alliance and date range.")
+            st.warning("No data found for the current selection.")
 
         # ==========================================
-        # SECTION 2: SCHEDULE PERFORMANCE
-        # ==========================================
-        st.divider()
-        st.header("2. Effective Schedule Analysis")
-        
-        match_data = df[['Alliance', 'Hour', 'Is_Win', 'Date_Range']].drop_duplicates()
-        
-        if not match_data.empty:
-            hourly_win = match_data.groupby('Hour').agg(
-                Matches=('Is_Win', 'count'),
-                Wins=('Is_Win', 'sum')
-            ).reset_index()
-            hourly_win['Winrate'] = (hourly_win['Wins'] / hourly_win['Matches']) * 100
-
-            fig_h = px.bar(hourly_win, x='Hour', y='Winrate', color='Winrate', 
-                           title="Win Probability by Time of Day",
-                           color_continuous_scale='RdYlGn', text_auto='.1f')
-            st.plotly_chart(fig_h, use_container_width=True)
-
-        # ==========================================
-        # SECTION 3: PLAYER DETAILS
+        # SECTION 2: PLAYER RANKING
         # ==========================================
         st.divider()
-        st.header("3. Player Ranking (Season)")
+        st.header("2. Top Player Ranking (Season)")
+        st.caption("Showing performance based on personal scores across all events.")
         
-        if not df[df['Alliance'].isin(sel_alliances)].empty:
-            p_stats = df[df['Alliance'].isin(sel_alliances)].groupby(['Player', 'Alliance']).agg(
-                Total_Points=('Score', 'sum'),
-                Average_Score=('Score', 'mean'),
-                Attendances=('Status', lambda x: (x == 'Active').sum())
-            ).reset_index().sort_values('Total_Points', ascending=False)
+        # Aggregate player scores for the season
+        p_ranking = df[df['Alliance'].isin(sel_alliances)].groupby(['Player', 'Alliance']).agg(
+            Cumulative_Score=('Score', 'sum'),
+            Average_Score=('Score', 'mean'),
+            Appearances=('Status', 'count'),
+            Times_Active=('Status', lambda x: (x == 'Active').sum())
+        ).reset_index().sort_values('Cumulative_Score', ascending=False)
 
-            st.dataframe(p_stats.head(20), use_container_width=True, hide_index=True)
+        # Show top 25 slots for rewards
+        st.dataframe(
+            p_ranking.head(25).style.format({'Cumulative_Score': '{:,.0f}', 'Average_Score': '{:,.1f}'}),
+            use_container_width=True, hide_index=True
+        )
 
         # ==========================================
         # SIDEBAR: EXPORTS
         # ==========================================
         st.sidebar.divider()
-        st.sidebar.header("📥 Download Reports")
+        st.sidebar.header("📥 Exports")
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             if not summary.empty:
-                summary.to_excel(writer, sheet_name='Summary', index=False)
-            if not p_stats.empty:
-                p_stats.to_excel(writer, sheet_name='Player_Ranking', index=False)
-            df.to_excel(writer, sheet_name='Raw_Data', index=False)
+                summary.to_excel(writer, sheet_name='Legion_Summary', index=False)
+            p_ranking.to_excel(writer, sheet_name='Season_Ranking', index=False)
+            df.to_excel(writer, sheet_name='Full_Activity_Log', index=False)
             
-        st.sidebar.download_button("💾 Download BOD Report", buffer, "BOD_Report.xlsx")
+        st.sidebar.download_button("💾 Download Activity Report", buffer, "BOD_Activity_Log.xlsx")
 
     except Exception as e:
-        st.error(f"Critical error: {e}. Check formatting rules.")
+        st.error(f"Analysis error: {e}")
 else:
-    st.info("Upload the Excel file with the 'BOD' sheet to begin the analysis.")
+    st.info("Please upload the BOD Excel file to start.")
