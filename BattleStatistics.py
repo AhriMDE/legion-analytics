@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import io
-import re
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -11,13 +10,13 @@ st.set_page_config(page_title="BOD Activity Tracker", layout="wide")
 
 st.sidebar.title("🛡️ BOD Control Panel")
 st.title("📊 Battle of Dawn (BOD) Activity Report")
-st.markdown("Advanced parsing logic with strict Legion detection (Anti-Legionalpha protection).")
+st.markdown("Activity tracking optimized for strict column mapping (Anti-Legionalpha logic).")
 
 # ==========================================
-# 1. PROCESSING FUNCTION (STRICT LEGION SCANNER)
+# 1. PROCESSING FUNCTION (STRICT COORDINATES)
 # ==========================================
 def process_bod_file(uploaded_file):
-    # dtype=str forces Pandas to read everything as text
+    # dtype=str forces Pandas to read everything exactly as text
     raw_df = pd.read_excel(uploaded_file, sheet_name="BOD", header=None, dtype=str)
     
     all_data = []
@@ -25,64 +24,59 @@ def process_bod_file(uploaded_file):
     current_date = "TBD"
     current_schedule = "TBD"
     current_legion = "Legion 1"
-    
-    # Patrones estrictos
-    date_pattern = r"(\d{4}[/-]\d{1,2}[/-]\d{1,2})"
-    # ESTO ES LA MAGIA: Busca exactamente "LEGION 1" al "5", acepta la "Ó" y espacios.
-    legion_pattern = r"^LEGI[OÓ]N\s*[1-5]$" 
 
     for i, row in raw_df.iterrows():
-        # Get all non-empty cells in the row
-        cells = [str(val).strip() for val in row if pd.notna(val) and str(val).strip().lower() not in ["nan", ""]]
+        # Leer estrictamente las columnas 0 (A), 1 (B) y 2 (C)
+        col_a = str(row[0]).strip() if len(row) > 0 else "nan"
+        col_b = str(row[1]).strip() if len(row) > 1 else "nan"
+        col_c = str(row[2]).strip() if len(row) > 2 else "nan"
         
-        if not cells:
+        # Ignorar filas completamente vacías
+        if col_a.lower() == "nan" and col_b.lower() == "nan":
             continue
 
-        row_str_upper = " ".join(cells).upper()
-
-        # 1. Detect Alliance
-        if len(cells) == 1 and 2 <= len(cells[0]) <= 5 and cells[0].isalpha() and cells[0].isupper():
-            current_alliance = cells[0].upper()
+        # 1. Detectar Alianza (Está solo en la Columna A, la B está vacía)
+        if 2 <= len(col_a) <= 5 and col_a.isalpha() and col_a.isupper() and col_b.lower() == "nan":
+            current_alliance = col_a
             continue
 
-        # 2. Detect Legion Header Row
-        # Ahora solo se activa si alguna celda coincide EXACTAMENTE con "Legion 1", "Legion 2", etc.
-        has_legion_header = any(re.match(legion_pattern, c.upper()) for c in cells)
-
-        if has_legion_header:
-            for c in cells:
-                c_up = c.upper()
-                clean_c = c.split(".")[0] if c.endswith(".0") else c
-
-                if re.match(legion_pattern, c_up):
-                    current_legion = c # Guarda el nombre (ej. Legion 1)
-                elif re.search(date_pattern, c):
-                    current_date = re.search(date_pattern, c).group(1).replace("-", "/")
-                elif "UTC" in c_up:
-                    current_schedule = c
-                elif clean_c.isdigit(): 
-                    current_schedule = f"{clean_c} UTC"
-            continue
-
-        # 3. Detect Player Data
-        rank_idx = -1
-        for idx, c in enumerate(cells):
-            clean_c = c.split(".")[0]
-            if clean_c.isdigit():
-                rank_idx = idx
-                break
+        # 2. Detectar Encabezado de Legión (Está SOLO en la Col A)
+        col_a_upper = col_a.upper()
+        if col_a_upper.startswith("LEGION") or col_a_upper.startswith("LEGIÓN"):
+            current_legion = col_a # Guarda el nombre original (ej. Legión 2)
+            
+            # Fecha: Está SOLO en la Col B
+            if col_b.lower() != "nan":
+                # Limpiar si Excel lo lee como "2026-05-09 00:00:00"
+                current_date = col_b.split(" ")[0].replace("-", "/")
+            
+            # Horario: Está SOLO en la Col C
+            if col_c.lower() != "nan":
+                sched = col_c
+                if sched.endswith(".0"): 
+                    sched = sched[:-2] # Quita decimales invisibles
                 
-        if rank_idx != -1 and len(cells) > rank_idx + 1:
-            clean_rank = cells[rank_idx].split(".")[0]
-            player_name = cells[rank_idx + 1]
+                # Si no dice UTC, se lo agregamos (ej. "1" -> "1 UTC")
+                if "UTC" not in sched.upper():
+                    sched = f"{sched} UTC"
+                current_schedule = sched
+            continue
+
+        # 3. Detectar Filas de Jugadores
+        # La Col A siempre tiene el Rango (Rank). Quitamos el ".0" si Excel lo añadió.
+        clean_rank = col_a.split('.')[0]
+        
+        # Si la Col A es un número, significa que encontramos a un jugador
+        if clean_rank.isdigit():
+            player_name = col_b
+            score_str = col_c
             
-            invalid_words = ["player", "joueur", "jugador", "rank", "date", "score", "utc"]
+            invalid_words = ["player", "joueur", "jugador", "rank", "date", "nan", ""]
             
-            # Verificamos que el jugador no sea una palabra inválida Y que NO sea exactamente un nombre de legión
-            if player_name.lower() not in invalid_words and not re.match(legion_pattern, player_name.upper()):
+            # Verificamos que no sea una fila de encabezados por accidente
+            if player_name.lower() not in invalid_words:
                 score = 0.0
-                if len(cells) > rank_idx + 2:
-                    score_str = cells[rank_idx + 2]
+                if score_str.lower() != "nan" and score_str != "":
                     try:
                         clean_score = score_str.replace(" ", "").replace(",", "")
                         score = float(clean_score)
