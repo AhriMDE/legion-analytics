@@ -7,7 +7,7 @@ import re
 # ==========================================
 # CONFIGURACIÓN DE LA PÁGINA
 # ==========================================
-st.set_page_config(page_title="BOD Activity Tracker v10", layout="wide")
+st.set_page_config(page_title="BOD Activity Tracker v11", layout="wide")
 
 st.sidebar.title("🛡️ Panel de Control BOD")
 st.title("📊 Reporte de Actividad Battle of Dawn")
@@ -21,8 +21,9 @@ def process_bod_file(uploaded_file):
     raw_df = pd.read_excel(uploaded_file, sheet_name="BOD", header=None, dtype=str)
     
     all_data = []
-    # Patrón estricto para detectar cabeceras de legión
     legion_pattern = r"^LEGI[OÓ]N\s*[1-5]$"
+    # Palabras clave que NO son alianzas (para evitar falsos positivos)
+    invalid_alliances = {"SCORE", "RANK", "DATE", "TOTAL", "TBD", "UTC", "PLAYER", "NAN"}
     
     # Recorremos cada celda del Excel buscando legiones
     for r in range(raw_df.shape[0]):
@@ -33,7 +34,7 @@ def process_bod_file(uploaded_file):
                 # ¡Encontramos una tabla de Legión!
                 legion_name = str(raw_df.iloc[r, c]).strip()
                 
-                # Datos de cabecera (Fecha y Hora suelen estar a la derecha)
+                # Datos de cabecera
                 date_val = str(raw_df.iloc[r, c+1]).strip() if c+1 < raw_df.shape[1] else "TBD"
                 hour_val = str(raw_df.iloc[r, c+2]).strip() if c+2 < raw_df.shape[1] else "TBD"
                 
@@ -42,15 +43,21 @@ def process_bod_file(uploaded_file):
                 if hour_val.lower() == "nan": 
                     hour_clean = "TBD"
                 else:
-                    h_num = hour_val.split(".")[0] # Evita el "1.0"
+                    h_num = hour_val.split(".")[0]
                     hour_clean = f"{h_num} UTC" if "UTC" not in h_num.upper() else h_num
 
-                # Búsqueda de Alianza: Escaneamos hacia ARRIBA en la misma columna
+                # Búsqueda de Alianza: Escaneamos hacia ARRIBA revisando TODA LA FILA
                 alliance_name = "Default"
                 for search_r in range(r - 1, -1, -1):
-                    potential = str(raw_df.iloc[search_r, c]).strip()
-                    if 2 <= len(potential) <= 5 and potential.isalpha() and potential.isupper():
-                        alliance_name = potential
+                    found = False
+                    for search_c in range(raw_df.shape[1]):
+                        potential = str(raw_df.iloc[search_r, search_c]).strip().upper()
+                        # Si tiene entre 2 y 5 letras, es solo texto y no es una palabra inválida, es la Alianza
+                        if 2 <= len(potential) <= 5 and potential.isalpha() and potential not in invalid_alliances:
+                            alliance_name = str(raw_df.iloc[search_r, search_c]).strip().upper()
+                            found = True
+                            break
+                    if found:
                         break
                 
                 # Extracción de Jugadores: Escaneamos hacia ABAJO desde r+2
@@ -59,7 +66,6 @@ def process_bod_file(uploaded_file):
                     player_cell = str(raw_df.iloc[k, c+1]).strip() if c+1 < raw_df.shape[1] else "nan"
                     score_cell = str(raw_df.iloc[k, c+2]).strip() if c+2 < raw_df.shape[1] else "0"
                     
-                    # Si el rango está vacío o encontramos otra cabecera, detenemos esta legión
                     if rank_cell.lower() == "nan" or rank_cell == "": break
                     if not rank_cell.isdigit(): continue
                     if player_cell.lower() in ["nan", "", "player", "joueur"]: continue
@@ -91,13 +97,11 @@ if uploaded_file is not None:
         df = process_bod_file(uploaded_file)
         
         if df.empty:
-            st.error("⚠️ No se detectaron datos. Revisa que el formato coincida con 'Legion X | Fecha | Hora'.")
+            st.error("⚠️ No se detectaron datos. Revisa el formato.")
             st.stop()
 
-        # Calculamos semanas totales para el % de participación
         total_events = df['Date'].nunique()
 
-        # Filtros Sidebar
         alliances = sorted(df['Alliance'].unique())
         sel_alliances = st.sidebar.multiselect("🛡️ Alianzas:", alliances, default=alliances)
         
@@ -116,7 +120,6 @@ if uploaded_file is not None:
         st.header(f"1. Resumen Semanal")
         
         if not df_filtered.empty:
-            # Tabla resumen
             summary = df_filtered.groupby(['Alliance', 'Legion', 'Schedule']).agg(
                 Total_Players=('Player', 'count'),
                 Total_Score=('Score', 'sum')
@@ -138,19 +141,22 @@ if uploaded_file is not None:
 
             # --- GRÁFICA CON SELECTOR ---
             st.subheader("📊 Comparativa de Actividad")
-            chart_alliance = st.selectbox("Selecciona Alianza para la gráfica:", sel_alliances)
-            
-            chart_data = df_filtered[df_filtered['Alliance'] == chart_alliance].groupby(['Legion', 'Status']).size().reset_index(name='Count')
-            
-            if not chart_data.empty:
-                fig = px.bar(
-                    chart_data, x="Legion", y="Count", color="Status",
-                    title=f"Jugadores Activos vs Inactivos - {chart_alliance}",
-                    barmode="group",
-                    color_discrete_map={'Active': '#2ECC71', 'Inactive': '#E74C3C'},
-                    text_auto=True
-                )
-                st.plotly_chart(fig, use_container_width=True)
+            if len(sel_alliances) > 0:
+                chart_alliance = st.selectbox("Selecciona Alianza para la gráfica:", sel_alliances)
+                
+                chart_data = df_filtered[df_filtered['Alliance'] == chart_alliance].groupby(['Legion', 'Status']).size().reset_index(name='Count')
+                
+                if not chart_data.empty:
+                    fig = px.bar(
+                        chart_data, x="Legion", y="Count", color="Status",
+                        title=f"Jugadores Activos vs Inactivos - {chart_alliance}",
+                        barmode="group",
+                        color_discrete_map={'Active': '#2ECC71', 'Inactive': '#E74C3C'},
+                        text_auto=True
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info(f"No hay datos para {chart_alliance}.")
 
         # ==========================================
         # SECCIÓN 2: RANKING DE TEMPORADA
@@ -182,7 +188,7 @@ if uploaded_file is not None:
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             if not df_filtered.empty: summary.to_excel(writer, sheet_name='Summary', index=False)
-            p_ranking.to_excel(writer, sheet_name='Ranking', index=False)
+            if not player_base.empty: p_ranking.to_excel(writer, sheet_name='Ranking', index=False)
             
         st.sidebar.download_button("📥 Descargar Excel", buffer, "BOD_Report.xlsx")
 
