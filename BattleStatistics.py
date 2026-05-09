@@ -7,7 +7,7 @@ import re
 # ==========================================
 # PAGE CONFIGURATION
 # ==========================================
-st.set_page_config(page_title="BOD Activity Tracker v12", layout="wide")
+st.set_page_config(page_title="BOD Activity Tracker v13", layout="wide")
 
 st.sidebar.title("🛡️ BOD Control Panel")
 st.title("📊 Battle of Dawn Activity Report")
@@ -145,48 +145,53 @@ if uploaded_file is not None:
                     st.plotly_chart(fig, use_container_width=True)
 
             # ==========================================
-            # NEW: DETAILED PLAYER LISTS BY LEGION
+            # SECTION 1.5: DETAILED PLAYER TABLES
             # ==========================================
             st.divider()
             st.header(f"📋 Detailed Player Lists by Legion ({chart_alliance})")
             
-            # Filter by the alliance selected for the chart
             df_detailed = df_filtered[df_filtered['Alliance'] == chart_alliance]
             legions_list = sorted(df_detailed['Legion'].unique())
             
             if legions_list:
-                # Create as many columns as there are Legions
-                cols = st.columns(len(legions_list))
+                active_dict = {}
+                inactive_dict = {}
                 
-                for idx, legion in enumerate(legions_list):
-                    with cols[idx]:
-                        legion_subset = df_detailed[df_detailed['Legion'] == legion]
-                        schedule = legion_subset['Schedule'].iloc[0]
-                        
-                        # Style Header
-                        st.markdown(f"### {legion}")
-                        st.caption(f"🕒 {schedule}")
-                        
-                        # Active List
-                        active_players = legion_subset[legion_subset['Status'] == 'Active']['Player'].tolist()
-                        st.markdown(f"✅ **Active Players** ({len(active_players)})")
-                        if active_players:
-                            # Using a small code block or list for clarity
-                            active_str = "\n".join([f"• {p}" for p in active_players])
-                            st.markdown(f"<div style='color: #2ECC71; font-size: 0.9em;'>{active_str}</div>", unsafe_allow_html=True)
-                        else:
-                            st.write("None")
-                        
-                        st.write("") # Spacer
-                        
-                        # Inactive List
-                        inactive_players = legion_subset[legion_subset['Status'] == 'Inactive']['Player'].tolist()
-                        st.markdown(f"❌ **Inactive Players** ({len(inactive_players)})")
-                        if inactive_players:
-                            inactive_str = "\n".join([f"• {p}" for p in inactive_players])
-                            st.markdown(f"<div style='color: #E74C3C; font-size: 0.9em; opacity: 0.8;'>{inactive_str}</div>", unsafe_allow_html=True)
-                        else:
-                            st.write("None")
+                for legion in legions_list:
+                    legion_subset = df_detailed[df_detailed['Legion'] == legion]
+                    schedule = legion_subset['Schedule'].iloc[0] if not legion_subset.empty else ""
+                    
+                    # Clean up the schedule string for the column header
+                    schedule_short = schedule.replace(" UTC", "").replace(":00:00", ":00")
+                    col_name = f"{legion} ({schedule_short})"
+                    
+                    active_players = legion_subset[legion_subset['Status'] == 'Active']['Player'].tolist()
+                    inactive_players = legion_subset[legion_subset['Status'] == 'Inactive']['Player'].tolist()
+                    
+                    active_dict[col_name] = active_players
+                    inactive_dict[col_name] = inactive_players
+                
+                # Pad the lists so they are all the same length (required for DataFrames)
+                max_active = max([len(v) for v in active_dict.values()]) if active_dict else 0
+                for k in active_dict:
+                    active_dict[k].extend([""] * (max_active - len(active_dict[k])))
+                    
+                max_inactive = max([len(v) for v in inactive_dict.values()]) if inactive_dict else 0
+                for k in inactive_dict:
+                    inactive_dict[k].extend([""] * (max_inactive - len(inactive_dict[k])))
+                
+                # Create the DataFrames
+                df_active = pd.DataFrame(active_dict)
+                df_inactive = pd.DataFrame(inactive_dict)
+                
+                # Display side by side
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("✅ **Active Players**")
+                    st.dataframe(df_active, use_container_width=True, hide_index=True)
+                with col2:
+                    st.markdown("💤 **Inactive Players**")
+                    st.dataframe(df_inactive, use_container_width=True, hide_index=True)
             else:
                 st.info("No data available for the detailed lists.")
 
