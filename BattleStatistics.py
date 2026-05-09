@@ -2,151 +2,133 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import io
+import re
 
 # ==========================================
-# PAGE CONFIGURATION
+# CONFIGURACIÓN DE LA PÁGINA
 # ==========================================
-st.set_page_config(page_title="BOD Activity Tracker", layout="wide")
+st.set_page_config(page_title="BOD Activity Tracker v10", layout="wide")
 
-st.sidebar.title("🛡️ BOD Control Panel")
-st.title("📊 Battle of Dawn (BOD) Activity Report")
-st.markdown("Activity tracking optimized for strict column mapping (Anti-Legionalpha logic).")
+st.sidebar.title("🛡️ Panel de Control BOD")
+st.title("📊 Reporte de Actividad Battle of Dawn")
+st.markdown("Motor de búsqueda universal optimizado para múltiples columnas y legiones.")
 
 # ==========================================
-# 1. PROCESSING FUNCTION (STRICT COORDINATES)
+# 1. FUNCIÓN DE PROCESAMIENTO (ESCÁNER UNIVERSAL)
 # ==========================================
 def process_bod_file(uploaded_file):
-    # dtype=str forces Pandas to read everything exactly as text
+    # Leemos todo el archivo como texto para evitar errores de formato
     raw_df = pd.read_excel(uploaded_file, sheet_name="BOD", header=None, dtype=str)
     
     all_data = []
-    current_alliance = "Default"
-    current_date = "TBD"
-    current_schedule = "TBD"
-    current_legion = "Legion 1"
-
-    for i, row in raw_df.iterrows():
-        # Leer estrictamente las columnas 0 (A), 1 (B) y 2 (C)
-        col_a = str(row[0]).strip() if len(row) > 0 else "nan"
-        col_b = str(row[1]).strip() if len(row) > 1 else "nan"
-        col_c = str(row[2]).strip() if len(row) > 2 else "nan"
-        
-        # Ignorar filas completamente vacías
-        if col_a.lower() == "nan" and col_b.lower() == "nan":
-            continue
-
-        # 1. Detectar Alianza (Está solo en la Columna A, la B está vacía)
-        if 2 <= len(col_a) <= 5 and col_a.isalpha() and col_a.isupper() and col_b.lower() == "nan":
-            current_alliance = col_a
-            continue
-
-        # 2. Detectar Encabezado de Legión (Está SOLO en la Col A)
-        col_a_upper = col_a.upper()
-        if col_a_upper.startswith("LEGION") or col_a_upper.startswith("LEGIÓN"):
-            current_legion = col_a # Guarda el nombre original (ej. Legión 2)
+    # Patrón estricto para detectar cabeceras de legión
+    legion_pattern = r"^LEGI[OÓ]N\s*[1-5]$"
+    
+    # Recorremos cada celda del Excel buscando legiones
+    for r in range(raw_df.shape[0]):
+        for c in range(raw_df.shape[1]):
+            cell_val = str(raw_df.iloc[r, c]).strip().upper()
             
-            # Fecha: Está SOLO en la Col B
-            if col_b.lower() != "nan":
-                # Limpiar si Excel lo lee como "2026-05-09 00:00:00"
-                current_date = col_b.split(" ")[0].replace("-", "/")
-            
-            # Horario: Está SOLO en la Col C
-            if col_c.lower() != "nan":
-                sched = col_c
-                if sched.endswith(".0"): 
-                    sched = sched[:-2] # Quita decimales invisibles
+            if re.match(legion_pattern, cell_val):
+                # ¡Encontramos una tabla de Legión!
+                legion_name = str(raw_df.iloc[r, c]).strip()
                 
-                # Si no dice UTC, se lo agregamos (ej. "1" -> "1 UTC")
-                if "UTC" not in sched.upper():
-                    sched = f"{sched} UTC"
-                current_schedule = sched
-            continue
+                # Datos de cabecera (Fecha y Hora suelen estar a la derecha)
+                date_val = str(raw_df.iloc[r, c+1]).strip() if c+1 < raw_df.shape[1] else "TBD"
+                hour_val = str(raw_df.iloc[r, c+2]).strip() if c+2 < raw_df.shape[1] else "TBD"
+                
+                # Limpieza de Fecha y Hora
+                date_clean = date_val.split(" ")[0].replace("-", "/") if date_val.lower() != "nan" else "TBD"
+                if hour_val.lower() == "nan": 
+                    hour_clean = "TBD"
+                else:
+                    h_num = hour_val.split(".")[0] # Evita el "1.0"
+                    hour_clean = f"{h_num} UTC" if "UTC" not in h_num.upper() else h_num
 
-        # 3. Detectar Filas de Jugadores
-        # La Col A siempre tiene el Rango (Rank). Quitamos el ".0" si Excel lo añadió.
-        clean_rank = col_a.split('.')[0]
-        
-        # Si la Col A es un número, significa que encontramos a un jugador
-        if clean_rank.isdigit():
-            player_name = col_b
-            score_str = col_c
-            
-            invalid_words = ["player", "joueur", "jugador", "rank", "date", "nan", ""]
-            
-            # Verificamos que no sea una fila de encabezados por accidente
-            if player_name.lower() not in invalid_words:
-                score = 0.0
-                if score_str.lower() != "nan" and score_str != "":
+                # Búsqueda de Alianza: Escaneamos hacia ARRIBA en la misma columna
+                alliance_name = "Default"
+                for search_r in range(r - 1, -1, -1):
+                    potential = str(raw_df.iloc[search_r, c]).strip()
+                    if 2 <= len(potential) <= 5 and potential.isalpha() and potential.isupper():
+                        alliance_name = potential
+                        break
+                
+                # Extracción de Jugadores: Escaneamos hacia ABAJO desde r+2
+                for k in range(r + 2, raw_df.shape[0]):
+                    rank_cell = str(raw_df.iloc[k, c]).strip().split('.')[0]
+                    player_cell = str(raw_df.iloc[k, c+1]).strip() if c+1 < raw_df.shape[1] else "nan"
+                    score_cell = str(raw_df.iloc[k, c+2]).strip() if c+2 < raw_df.shape[1] else "0"
+                    
+                    # Si el rango está vacío o encontramos otra cabecera, detenemos esta legión
+                    if rank_cell.lower() == "nan" or rank_cell == "": break
+                    if not rank_cell.isdigit(): continue
+                    if player_cell.lower() in ["nan", "", "player", "joueur"]: continue
+                    
                     try:
-                        clean_score = score_str.replace(" ", "").replace(",", "")
-                        score = float(clean_score)
+                        score = float(score_cell.replace(" ", "").replace(",", ""))
                     except:
                         score = 0.0
-
-                all_data.append({
-                    'Alliance': current_alliance,
-                    'Date': current_date,
-                    'Schedule': current_schedule,
-                    'Legion': current_legion,
-                    'Player': player_name,
-                    'Score': score,
-                    'Status': 'Active' if score > 0 else 'Inactive'
-                })
-
+                        
+                    all_data.append({
+                        'Alliance': alliance_name,
+                        'Date': date_clean,
+                        'Schedule': hour_clean,
+                        'Legion': legion_name,
+                        'Player': player_cell,
+                        'Score': score,
+                        'Status': 'Active' if score > 0 else 'Inactive'
+                    })
+                    
     return pd.DataFrame(all_data)
 
 # ==========================================
-# 2. DATA LOADING & FILTERS
+# 2. CARGA Y FILTROS
 # ==========================================
-uploaded_file = st.sidebar.file_uploader("📂 Upload Excel (BOD Sheet)", type=['xlsx', 'xlsm'])
+uploaded_file = st.sidebar.file_uploader("📂 Subir Excel (Pestaña BOD)", type=['xlsx', 'xlsm'])
 
 if uploaded_file is not None:
     try:
         df = process_bod_file(uploaded_file)
         
         if df.empty:
-            st.error("⚠️ No data could be extracted. Please check the Excel format.")
+            st.error("⚠️ No se detectaron datos. Revisa que el formato coincida con 'Legion X | Fecha | Hora'.")
             st.stop()
 
+        # Calculamos semanas totales para el % de participación
         total_events = df['Date'].nunique()
 
-        # Filters
+        # Filtros Sidebar
         alliances = sorted(df['Alliance'].unique())
-        sel_alliances = st.sidebar.multiselect("🛡️ Alliances:", alliances, default=alliances)
+        sel_alliances = st.sidebar.multiselect("🛡️ Alianzas:", alliances, default=alliances)
         
         dates = sorted(df['Date'].unique(), reverse=True)
-        default_dates = dates[:2] if len(dates) >= 2 else dates
-        sel_dates = st.sidebar.multiselect("📅 Select Dates (Choose multiple for weekends):", dates, default=default_dates)
+        sel_dates = st.sidebar.multiselect("📅 Seleccionar Fechas:", dates, default=dates[:2])
 
         if not sel_dates:
-            st.warning("⚠️ Please select at least one date in the sidebar.")
+            st.warning("Selecciona al menos una fecha para ver el resumen.")
             st.stop()
 
         df_filtered = df[(df['Alliance'].isin(sel_alliances)) & (df['Date'].isin(sel_dates))]
 
         # ==========================================
-        # SECTION 1: WEEKLY SUMMARY
+        # SECCIÓN 1: RESUMEN DE ACTIVIDAD
         # ==========================================
-        dates_title = ", ".join(sel_dates)
-        st.header(f"1. Event Summary: {dates_title}")
+        st.header(f"1. Resumen Semanal")
         
         if not df_filtered.empty:
-            # Base table
+            # Tabla resumen
             summary = df_filtered.groupby(['Alliance', 'Legion', 'Schedule']).agg(
                 Total_Players=('Player', 'count'),
                 Total_Score=('Score', 'sum')
             ).reset_index()
 
-            # Active/Inactive split
-            status_summary = df_filtered.groupby(['Alliance', 'Legion', 'Schedule', 'Status']).size().unstack(fill_value=0).reset_index()
-            
-            if 'Active' not in status_summary.columns: status_summary['Active'] = 0
-            if 'Inactive' not in status_summary.columns: status_summary['Inactive'] = 0
+            status_counts = df_filtered.groupby(['Alliance', 'Legion', 'Schedule', 'Status']).size().unstack(fill_value=0).reset_index()
+            if 'Active' not in status_counts.columns: status_counts['Active'] = 0
+            if 'Inactive' not in status_counts.columns: status_counts['Inactive'] = 0
 
-            summary = summary.merge(status_summary[['Alliance', 'Legion', 'Schedule', 'Active', 'Inactive']], on=['Alliance', 'Legion', 'Schedule'])
+            summary = summary.merge(status_counts[['Alliance', 'Legion', 'Schedule', 'Active', 'Inactive']], on=['Alliance', 'Legion', 'Schedule'])
             summary['% Participation'] = (summary['Active'] / summary['Total_Players']) * 100
 
-            # Column ordering
             summary = summary[['Alliance', 'Legion', 'Schedule', 'Total_Players', 'Active', 'Inactive', 'Total_Score', '% Participation']]
 
             st.dataframe(
@@ -154,46 +136,38 @@ if uploaded_file is not None:
                 use_container_width=True, hide_index=True
             )
 
-            # --- DYNAMIC CHART ---
-            st.subheader("📊 Activity Comparison per Legion")
+            # --- GRÁFICA CON SELECTOR ---
+            st.subheader("📊 Comparativa de Actividad")
+            chart_alliance = st.selectbox("Selecciona Alianza para la gráfica:", sel_alliances)
             
-            if len(sel_alliances) > 0:
-                chart_alliance = st.selectbox("🎯 Select Alliance for the chart:", sel_alliances)
-                
-                chart_data = df_filtered[df_filtered['Alliance'] == chart_alliance].groupby(['Legion', 'Status']).size().reset_index(name='Count')
-                
-                if not chart_data.empty:
-                    fig = px.bar(
-                        chart_data, 
-                        x="Legion", 
-                        y="Count", 
-                        color="Status",
-                        title=f"Active vs Inactive Players - {chart_alliance}",
-                        labels={"Count": "Number of Players", "Legion": "Legion"},
-                        barmode="group",
-                        color_discrete_map={'Active': '#2ECC71', 'Inactive': '#E74C3C'},
-                        text_auto=True
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info(f"No data available for {chart_alliance} on this date.")
+            chart_data = df_filtered[df_filtered['Alliance'] == chart_alliance].groupby(['Legion', 'Status']).size().reset_index(name='Count')
+            
+            if not chart_data.empty:
+                fig = px.bar(
+                    chart_data, x="Legion", y="Count", color="Status",
+                    title=f"Jugadores Activos vs Inactivos - {chart_alliance}",
+                    barmode="group",
+                    color_discrete_map={'Active': '#2ECC71', 'Inactive': '#E74C3C'},
+                    text_auto=True
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
         # ==========================================
-        # SECTION 2: PLAYER RANKING (SEASON)
+        # SECCIÓN 2: RANKING DE TEMPORADA
         # ==========================================
         st.divider()
-        st.header("2. Season Player Ranking")
+        st.header("2. Perfil de Jugadores (Acumulado)")
         
         player_base = df[df['Alliance'].isin(sel_alliances)]
         
         if not player_base.empty:
             p_ranking = player_base.groupby(['Player', 'Alliance']).agg(
                 Total_Score=('Score', 'sum'),
-                Participations=('Status', lambda x: (x == 'Active').sum()),
+                Attendances=('Status', lambda x: (x == 'Active').sum()),
                 Favorite_Hour=('Schedule', lambda x: x.mode().iloc[0] if not x.mode().empty else "N/A")
             ).reset_index()
 
-            p_ranking['Participation %'] = (p_ranking['Participations'] / total_events) * 100
+            p_ranking['Participation %'] = (p_ranking['Attendances'] / total_events) * 100
             p_ranking = p_ranking.sort_values('Total_Score', ascending=False)
 
             st.dataframe(
@@ -202,23 +176,17 @@ if uploaded_file is not None:
             )
 
         # ==========================================
-        # DEBUG SECTION & EXPORTS
+        # EXPORTACIÓN
         # ==========================================
-        st.divider()
-        with st.expander("🛠️ Raw Data View (Debug)"):
-            st.dataframe(df_filtered)
-            
         st.sidebar.divider()
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            if not df_filtered.empty:
-                summary.to_excel(writer, sheet_name='Event_Summary', index=False)
-                p_ranking.to_excel(writer, sheet_name='Season_Ranking', index=False)
-            df.to_excel(writer, sheet_name='Raw_Data', index=False)
+            if not df_filtered.empty: summary.to_excel(writer, sheet_name='Summary', index=False)
+            p_ranking.to_excel(writer, sheet_name='Ranking', index=False)
             
-        st.sidebar.download_button("📥 Download Full Report", buffer, "BOD_Activity_Report.xlsx")
+        st.sidebar.download_button("📥 Descargar Excel", buffer, "BOD_Report.xlsx")
 
     except Exception as e:
-        st.error(f"Analysis error: {e}")
+        st.error(f"Error: {e}")
 else:
-    st.info("Upload the Excel file with the 'BOD' sheet to begin.")
+    st.info("Sube tu archivo Excel para comenzar.")
