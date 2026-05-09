@@ -2,21 +2,22 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import io
+import re
 
 # ==========================================
 # PAGE CONFIGURATION
 # ==========================================
-st.set_page_config(page_title="BOD Activity Tracker v9", layout="wide")
+st.set_page_config(page_title="BOD Activity Tracker", layout="wide")
 
 st.sidebar.title("🛡️ BOD Control Panel")
 st.title("📊 Battle of Dawn (BOD) Activity Report")
-st.markdown("Activity tracking optimized for exact column mapping and multiple dates.")
+st.markdown("Advanced parsing logic that ignores column shifts and empty cells.")
 
 # ==========================================
-# 1. PROCESSING FUNCTION (BULLETPROOF LOGIC)
+# 1. PROCESSING FUNCTION (BULLETPROOF ROW SCANNER)
 # ==========================================
 def process_bod_file(uploaded_file):
-    # dtype=str forces Pandas to read everything as text
+    # dtype=str forces Pandas to read everything as text, avoiding decimal errors like "1" becoming "1.0"
     raw_df = pd.read_excel(uploaded_file, sheet_name="BOD", header=None, dtype=str)
     
     all_data = []
@@ -24,75 +25,79 @@ def process_bod_file(uploaded_file):
     current_date = "TBD"
     current_schedule = "TBD"
     current_legion = "Legion 1"
+    
+    # Matches dates with dashes or slashes
+    date_pattern = r"(\d{4}[/-]\d{1,2}[/-]\d{1,2})"
 
     for i, row in raw_df.iterrows():
-        # Leer estrictamente las columnas A, B y C
-        col_a = str(row[0]).strip()
-        col_b = str(row[1]).strip()
-        col_c = str(row[2]).strip()
+        # Get all non-empty cells in the row, reading from left to right (ignores empty columns)
+        cells = [str(val).strip() for val in row if pd.notna(val) and str(val).strip().lower() not in ["nan", ""]]
         
-        # Ignorar filas completamente vacías
-        if col_a.lower() == "nan" and col_b.lower() == "nan":
+        if not cells:
             continue
 
-        # 1. Detectar Alianza (Col A tiene el nombre corto, Col B está vacía)
-        if 2 <= len(col_a) <= 5 and col_a.isalpha() and col_a.isupper() and col_b.lower() == "nan":
-            current_alliance = col_a
+        row_str_upper = " ".join(cells).upper()
+
+        # 1. Detect Alliance
+        # If there's exactly 1 cell, it's 2-5 letters long, and all uppercase (e.g., "DL", "KUT")
+        if len(cells) == 1 and 2 <= len(cells[0]) <= 5 and cells[0].isalpha() and cells[0].isupper():
+            current_alliance = cells[0].upper()
             continue
 
-        # 2. Detectar Encabezado de Legión (Inmune a acentos)
-        col_a_norm = col_a.upper().replace("Ó", "O").replace("É", "E")
-        
-        if col_a_norm.startswith("LEGION"):
-            current_legion = col_a # Guarda el nombre original
-            
-            # Limpiar Fecha (Toma solo la parte de la fecha)
-            raw_date = col_b if col_b.lower() != "nan" else "TBD"
-            if len(raw_date) >= 10:
-                current_date = raw_date[:10].replace("-", "/")
-            else:
-                current_date = raw_date
-            
-            # Limpiar Horario (Convierte "1.0" o "1" en "1 UTC")
-            sched = col_c if col_c.lower() != "nan" else "TBD"
-            if sched.endswith(".0"):
-                sched = sched[:-2] 
+        # 2. Detect Legion Header Row
+        # Looks for Legion, Date, and Schedule in ANY order across the row
+        if "LEGION" in row_str_upper or "LEGIÓN" in row_str_upper:
+            for c in cells:
+                c_up = c.upper()
+                # Clean hidden decimals for hour parsing if Excel read it as a float
+                clean_c = c.split(".")[0] if c.endswith(".0") else c
+
+                if "LEGION" in c_up or "LEGIÓN" in c_up:
+                    current_legion = c
+                elif re.search(date_pattern, c):
+                    current_date = re.search(date_pattern, c).group(1).replace("-", "/")
+                elif "UTC" in c_up:
+                    current_schedule = c
+                elif clean_c.isdigit(): # Catches single numbers like "1" or "11"
+                    current_schedule = f"{clean_c} UTC"
+            continue
+
+        # 3. Detect Player Data
+        # Finds the first cell that is a number (The Rank)
+        rank_idx = -1
+        for idx, c in enumerate(cells):
+            clean_c = c.split(".")[0]
+            if clean_c.isdigit():
+                rank_idx = idx
+                break
                 
-            if sched.isdigit():
-                sched = f"{sched} UTC"
-            elif "UTC" not in sched.upper() and sched != "TBD":
-                sched = f"{sched} UTC"
-                
-            current_schedule = sched
-            continue
-
-        # 3. Detectar Filas de Jugadores
-        clean_rank = col_a.split('.')[0]
-        
-        invalid_headers = ["player", "joueur", "jugador", "rank", "date", "rango", "score", "puntuación", "puntuacion"]
-        
-        if clean_rank.isdigit() and col_b.lower() != "nan" and col_b.lower() not in invalid_headers:
-            player_name = col_b
-            score_str = col_c
+        # If a Rank is found, the next cell is the Player, and the next is the Score
+        if rank_idx != -1 and len(cells) > rank_idx + 1:
+            clean_rank = cells[rank_idx].split(".")[0]
+            player_name = cells[rank_idx + 1]
             
-            if score_str.lower() == "nan" or score_str == "":
+            invalid_words = ["player", "joueur", "jugador", "rank", "date", "score", "utc"]
+            
+            # Ensure it's not a header row
+            if player_name.lower() not in invalid_words and "LEGION" not in player_name.upper():
                 score = 0.0
-            else:
-                try:
-                    clean_score = score_str.replace(" ", "").replace(",", "")
-                    score = float(clean_score)
-                except:
-                    score = 0.0
+                if len(cells) > rank_idx + 2:
+                    score_str = cells[rank_idx + 2]
+                    try:
+                        clean_score = score_str.replace(" ", "").replace(",", "")
+                        score = float(clean_score)
+                    except:
+                        score = 0.0
 
-            all_data.append({
-                'Alliance': current_alliance,
-                'Date': current_date,
-                'Schedule': current_schedule,
-                'Legion': current_legion,
-                'Player': player_name,
-                'Score': score,
-                'Status': 'Active' if score > 0 else 'Inactive'
-            })
+                all_data.append({
+                    'Alliance': current_alliance,
+                    'Date': current_date,
+                    'Schedule': current_schedule,
+                    'Legion': current_legion,
+                    'Player': player_name,
+                    'Score': score,
+                    'Status': 'Active' if score > 0 else 'Inactive'
+                })
 
     return pd.DataFrame(all_data)
 
@@ -116,19 +121,18 @@ if uploaded_file is not None:
         sel_alliances = st.sidebar.multiselect("🛡️ Alliances:", alliances, default=alliances)
         
         dates = sorted(df['Date'].unique(), reverse=True)
-        # Seleccionamos por defecto las dos fechas más recientes (ideal para eventos de fin de semana)
         default_dates = dates[:2] if len(dates) >= 2 else dates
-        
-        # ¡CAMBIO CLAVE AQUÍ! Ahora es multiselect
         sel_dates = st.sidebar.multiselect("📅 Select Dates (Choose multiple for weekends):", dates, default=default_dates)
 
-        # Filtramos por las fechas seleccionadas
+        if not sel_dates:
+            st.warning("⚠️ Please select at least one date in the sidebar.")
+            st.stop()
+
         df_filtered = df[(df['Alliance'].isin(sel_alliances)) & (df['Date'].isin(sel_dates))]
 
         # ==========================================
         # SECTION 1: WEEKLY SUMMARY
         # ==========================================
-        # Unimos las fechas para el título
         dates_title = ", ".join(sel_dates)
         st.header(f"1. Event Summary: {dates_title}")
         
@@ -188,29 +192,34 @@ if uploaded_file is not None:
         
         player_base = df[df['Alliance'].isin(sel_alliances)]
         
-        p_ranking = player_base.groupby(['Player', 'Alliance']).agg(
-            Total_Score=('Score', 'sum'),
-            Participations=('Status', lambda x: (x == 'Active').sum()),
-            Favorite_Hour=('Schedule', lambda x: x.mode().iloc[0] if not x.mode().empty else "N/A")
-        ).reset_index()
+        if not player_base.empty:
+            p_ranking = player_base.groupby(['Player', 'Alliance']).agg(
+                Total_Score=('Score', 'sum'),
+                Participations=('Status', lambda x: (x == 'Active').sum()),
+                Favorite_Hour=('Schedule', lambda x: x.mode().iloc[0] if not x.mode().empty else "N/A")
+            ).reset_index()
 
-        p_ranking['Participation %'] = (p_ranking['Participations'] / total_events) * 100
-        p_ranking = p_ranking.sort_values('Total_Score', ascending=False)
+            p_ranking['Participation %'] = (p_ranking['Participations'] / total_events) * 100
+            p_ranking = p_ranking.sort_values('Total_Score', ascending=False)
 
-        st.dataframe(
-            p_ranking.style.format({'Total_Score': '{:,.0f}', 'Participation %': '{:.1f}%'}),
-            use_container_width=True, hide_index=True
-        )
+            st.dataframe(
+                p_ranking.style.format({'Total_Score': '{:,.0f}', 'Participation %': '{:.1f}%'}),
+                use_container_width=True, hide_index=True
+            )
 
         # ==========================================
-        # EXPORTS
+        # DEBUG SECTION & EXPORTS
         # ==========================================
+        st.divider()
+        with st.expander("🛠️ Raw Data View (Debug)"):
+            st.dataframe(df_filtered)
+            
         st.sidebar.divider()
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             if not df_filtered.empty:
                 summary.to_excel(writer, sheet_name='Event_Summary', index=False)
-            p_ranking.to_excel(writer, sheet_name='Season_Ranking', index=False)
+                p_ranking.to_excel(writer, sheet_name='Season_Ranking', index=False)
             df.to_excel(writer, sheet_name='Raw_Data', index=False)
             
         st.sidebar.download_button("📥 Download Full Report", buffer, "BOD_Activity_Report.xlsx")
