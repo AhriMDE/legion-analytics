@@ -4,355 +4,212 @@ import plotly.express as px
 import io
 
 # ==========================================
-# STREAMLIT PAGE CONFIGURATION
+# CONFIGURACIÓN DE LA PÁGINA
 # ==========================================
-st.set_page_config(page_title="Legion Analytics", layout="wide")
+st.set_page_config(page_title="Alliance & Legion Analytics", layout="wide")
 
-# --- SIDEBAR CONFIGURATION ---
-st.sidebar.title("🎛️ Control Panel")
-st.sidebar.markdown("Upload file and select week to filter.")
+# --- BARRA LATERAL ---
+st.sidebar.title("🛡️ Panel de Control")
+st.sidebar.markdown("Sube el archivo y filtra por Alianza y Semana.")
 
-# Main Title
-st.title("📊 Legion & Player Activity Report")
-st.markdown("Select a week in the sidebar to filter the **Legion Summary**. The **Global Sections** analyze the full season.")
+# Título Principal
+st.title("📊 Reporte de Actividad: Multi-Alianza")
+st.markdown("Este reporte permite analizar el rendimiento de múltiples alianzas y sus legiones.")
 
 # ==========================================
-# 1. FILE UPLOADER (SIDEBAR)
+# 1. CARGA Y PROCESAMIENTO DE DATOS
 # ==========================================
-uploaded_file = st.sidebar.file_uploader("📂 Upload Excel File", type=['xlsx', 'xlsm'])
+uploaded_file = st.sidebar.file_uploader("📂 Cargar archivo Excel", type=['xlsx', 'xlsm'])
 
 if uploaded_file is not None:
     try:
-        # Load the specific sheet
-        df = pd.read_excel(uploaded_file, sheet_name='Données Brutes')
+        # Leemos la primera hoja (sheet_name=0) para evitar errores de nombre
+        df = pd.read_excel(uploaded_file, sheet_name=0)
         
-        # ==========================================
-        # --- DATA CLEANING & PREPROCESSING ---
-        # ==========================================
+        # --- LIMPIEZA DE DATOS ---
         
-        # 1. Clean Time (Heure)
+        # 1. Limpiar Hora
         def clean_hour(val):
             val_str = str(val).upper().replace('H', '').strip()
             if val_str.isdigit():
                 return f"{int(val_str):02d}:00"
             return val
-        
         df['Heure'] = df['Heure'].apply(clean_hour)
 
-        # 2. Clean Date & Create Week Label
+        # 2. Fechas y Etiquetas de Semana
         temp_datetime = pd.to_datetime(df['Date'], dayfirst=True)
         df['Date'] = temp_datetime.dt.date
         df['Year'] = temp_datetime.dt.isocalendar().year
         df['Week'] = temp_datetime.dt.isocalendar().week
 
-        # Create "Week Label"
         week_date_map = {}
         for (year, week), group in df.groupby(['Year', 'Week']):
             unique_dates = sorted(group['Date'].unique())
             date_strs = [d.strftime('%d/%m') for d in unique_dates]
-            dates_joined = ", ".join(date_strs)
-            label = f"{year} W{week:02d} ({dates_joined})"
+            label = f"{year} W{week:02d} ({', '.join(date_strs)})"
             week_date_map[(year, week)] = label
 
         df['Week_Label'] = df.apply(lambda row: week_date_map.get((row['Year'], row['Week'])), axis=1)
 
-        # 3. Clean Score
+        # 3. Limpiar Score y Status
         if df['Score'].dtype == 'object':
             df['Score'] = df['Score'].astype(str).str.replace(',', '').str.replace('.', '')
         df['Score'] = pd.to_numeric(df['Score'], errors='coerce').fillna(0)
-
-        # 4. Define Status & Win Helper
-        df['Status'] = df['Score'].apply(lambda x: 'Active' if x > 0 else 'Inactive')
+        df['Status'] = df['Score'].apply(lambda x: 'Activo' if x > 0 else 'Inactivo')
         
-        # Helper column for calculations (1 = Win, 0 = Loss/Draw)
-        df['Is_Win'] = df['Result'].astype(str).apply(lambda x: 1 if 'Victory' in x else 0)
+        # Auxiliar para victorias (1=Victoria, 0=Otros)
+        df['Is_Win'] = df['Result'].astype(str).apply(lambda x: 1 if 'Victory' in x.strip() else 0)
 
         # ==========================================
-        # --- WEEK SELECTOR (SIDEBAR) ---
+        # FILTROS GLOBALES (SIDEBAR)
         # ==========================================
+        
+        # Filtro de Alianza
+        unique_alliances = sorted(df['Alliance'].unique())
+        selected_alliances = st.sidebar.multiselect(
+            "🛡️ Seleccionar Alianzas:", 
+            unique_alliances, 
+            default=unique_alliances
+        )
+
+        # Filtro de Semana
         unique_weeks = sorted(df['Week_Label'].unique(), reverse=True)
-        selected_week = st.sidebar.selectbox("📅 Select Week to Analyze:", unique_weeks)
+        selected_week = st.sidebar.selectbox("📅 Seleccionar Semana:", unique_weeks)
 
-        # Create a filtered dataframe ONLY for the Legion section
-        df_week_filtered = df[df['Week_Label'] == selected_week]
+        # APLICAR FILTRO DE ALIANZA AL DF GLOBAL
+        df_filtered = df[df['Alliance'].isin(selected_alliances)]
+        
+        # DF filtrado por semana para la sección 1
+        df_week_filtered = df_filtered[df_filtered['Week_Label'] == selected_week]
 
         # ==========================================
-        # 2. LEGION SUMMARY SECTION (WEEKLY)
+        # SECCIÓN 1: RESUMEN SEMANAL POR ALIANZA
         # ==========================================
-        st.header(f"1. Legion Summary: {selected_week}")
-        st.caption("These statistics apply only to the selected week.")
+        st.header(f"1. Resumen Semanal: {selected_week}")
         
-        # --- A. STATS & CHART ---
-        base_stats = df_week_filtered.groupby('Legion').agg(
-            Total_Players=('Joueur', 'nunique'),
-            Total_Score=('Score', 'sum'),
-            Result=('Result', lambda x: x.mode().iloc[0] if not x.mode().empty else "N/A"),
-            Schedule=('Heure', lambda x: x.mode().iloc[0] if not x.mode().empty else "N/A")
-        )
-
-        status_counts = df_week_filtered.groupby(['Legion', 'Status']).size().unstack(fill_value=0)
-        
-        if 'Active' not in status_counts.columns: status_counts['Active'] = 0
-        if 'Inactive' not in status_counts.columns: status_counts['Inactive'] = 0
-            
-        final_summary_table = base_stats.join(status_counts[['Active', 'Inactive']]).reset_index()
-        final_summary_table['Participation_Rate'] = (final_summary_table['Active'] / final_summary_table['Total_Players']) * 100
-
-        # Add Total Row
-        total_active = final_summary_table['Active'].sum()
-        total_players_sum = final_summary_table['Total_Players'].sum()
-        total_participation_rate = (total_active / total_players_sum * 100) if total_players_sum > 0 else 0
-
-        total_row = pd.DataFrame({
-            'Legion': ['TOTAL'],
-            'Total_Players': [total_players_sum],
-            'Total_Score': [final_summary_table['Total_Score'].sum()],
-            'Result': ['-'], 'Schedule': ['-'],
-            'Active': [total_active],
-            'Inactive': [final_summary_table['Inactive'].sum()],
-            'Participation_Rate': [total_participation_rate]
-        })
-        final_summary_table = pd.concat([final_summary_table, total_row], ignore_index=True)
-
-        col1, col2 = st.columns([1.5, 2])
-        
-        with col1:
-            st.subheader("Stats by Legion")
-            st.dataframe(
-                final_summary_table.style.format({
-                    'Total_Score': lambda x: f"{x:,.0f}".replace(",", " "),
-                    'Total_Players': '{:.0f}', 'Active': '{:.0f}', 'Inactive': '{:.0f}',
-                    'Participation_Rate': '{:.1f}%'
-                }), 
-                use_container_width=True,
-                column_order=['Legion', 'Schedule', 'Result', 'Total_Players', 'Total_Score', 'Active', 'Inactive', 'Participation_Rate'] 
+        if not df_week_filtered.empty:
+            # Agrupación por Alianza y Legión
+            base_stats = df_week_filtered.groupby(['Alliance', 'Legion']).agg(
+                Jugadores=('Joueur', 'nunique'),
+                Score_Total=('Score', 'sum'),
+                Resultado=('Result', lambda x: x.mode().iloc[0] if not x.mode().empty else "-"),
+                Horario=('Heure', lambda x: x.mode().iloc[0] if not x.mode().empty else "-")
             )
 
-        with col2:
-            st.subheader("Weekly Activity Chart")
-            weekly_activity = df_week_filtered.groupby(['Legion', 'Status']).size().reset_index(name='Count')
-            fig = px.bar(
-                weekly_activity, x="Legion", y="Count", color="Status", 
-                title=f"Legion Health - {selected_week}",
-                labels={"Count": "Number of Players"},
-                color_discrete_map={'Active': '#0052cc', 'Inactive': '#EF553B'},
-                barmode='stack'
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            status_counts = df_week_filtered.groupby(['Alliance', 'Legion', 'Status']).size().unstack(fill_value=0)
+            if 'Activo' not in status_counts.columns: status_counts['Activo'] = 0
+            if 'Inactivo' not in status_counts.columns: status_counts['Inactivo'] = 0
+                
+            summary_table = base_stats.join(status_counts[['Activo', 'Inactivo']]).reset_index()
+            summary_table['%_Part'] = (summary_table['Activo'] / summary_table['Jugadores']) * 100
 
-        # --- WEEKLY HOURLY CHART ---
-        st.write("---")
-        st.subheader(f"⏰ Active Participations by Schedule ({selected_week})")
-        weekly_hourly_stats = df_week_filtered[df_week_filtered['Score'] > 0].groupby('Heure').size().reset_index(name='Active_Players')
-        
-        fig_weekly_hourly = px.bar(
-            weekly_hourly_stats, x='Heure', y='Active_Players',
-            title=f"Sum of Active Players by Hour - {selected_week}",
-            labels={'Active_Players': 'Total Active Players'},
-            color_discrete_sequence=['#00CC96'], text='Active_Players'
-        )
-        fig_weekly_hourly.update_traces(textposition='outside')
-        st.plotly_chart(fig_weekly_hourly, use_container_width=True)
-
-        # --- B. DETAILED LISTS ---
-        st.divider()
-        st.subheader("📋 Detailed Player Lists by Legion (with Schedule)")
-
-        legion_time_map = df_week_filtered.groupby('Legion')['Heure'].agg(
-            lambda x: x.mode().iloc[0] if not x.mode().empty else "N/A"
-        )
-
-        def create_legion_table(status_filter):
-            subset = df_week_filtered[df_week_filtered['Status'] == status_filter]
-            all_legions = sorted(df_week_filtered['Legion'].unique())
-            data_dict = {}
-            max_length = 0
-            for legion in all_legions:
-                players = subset[subset['Legion'] == legion]['Joueur'].tolist()
-                time_val = legion_time_map.get(legion, "N/A")
-                col_name = f"Legion {legion} ({time_val})"
-                data_dict[col_name] = players
-                if len(players) > max_length: max_length = len(players)
-            for key in data_dict: data_dict[key] += [""] * (max_length - len(data_dict[key]))
-            return pd.DataFrame(data_dict)
-
-        df_active = create_legion_table('Active')
-        df_inactive = create_legion_table('Inactive')
-
-        col_act, col_inact = st.columns(2)
-        with col_act:
-            st.markdown("✅ **Active Players**")
-            st.dataframe(df_active, use_container_width=True, hide_index=True)
-        with col_inact:
-            st.markdown("💤 **Inactive Players**")
-            st.dataframe(df_inactive, use_container_width=True, hide_index=True)
-
-        # ==========================================
-        # 2. SEASON PERFORMANCE BY SCHEDULE (GLOBAL)
-        # ==========================================
-        st.divider()
-        st.header("2. Season Performance by Schedule (Global)")
-        st.markdown("Analysis of **Win Rates** across different time slots. *Note: Data is aggregated by Match.*")
-
-        # 1. Preparar datos de PARTIDAS ÚNICAS
-        match_level_df = df[['Date', 'Legion', 'Heure', 'Is_Win']].drop_duplicates()
-
-        col_season_1, col_season_2 = st.columns([1, 1])
-
-        # Variable cambiada: time_season_stats (antes era legion_season_stats)
-        with col_season_1:
-            st.subheader("🏆 Winrate by Schedule")
-            time_season_stats = match_level_df.groupby('Heure').agg(
-                Matches_Played=('Is_Win', 'count'),
-                Wins=('Is_Win', 'sum')
-            ).reset_index()
-            
-            time_season_stats['Win_Rate'] = (time_season_stats['Wins'] / time_season_stats['Matches_Played']) * 100
-            time_season_stats = time_season_stats.sort_values('Win_Rate', ascending=False)
-
+            st.subheader("📊 Estadísticas por Alianza y Legión")
             st.dataframe(
-                time_season_stats.style.format({
-                    'Win_Rate': '{:.1f}%',
-                    'Matches_Played': '{:.0f}',
-                    'Wins': '{:.0f}'
-                }).background_gradient(subset=['Win_Rate'], cmap='RdYlGn', vmin=0, vmax=100),
+                summary_table.style.format({
+                    'Score_Total': lambda x: f"{x:,.0f}".replace(",", " "),
+                    '%_Part': '{:.1f}%'
+                }).background_gradient(subset=['%_Part'], cmap='RdYlGn', vmin=0, vmax=100),
                 use_container_width=True,
                 hide_index=True
             )
 
-        with col_season_2:
-            st.subheader("📊 Schedule Efficiency")
-            fig_winrate = px.bar(
-                time_season_stats, x='Heure', y='Win_Rate',
-                title="Win Rate Percentage per Hour",
-                color='Win_Rate',
-                color_continuous_scale='RdYlGn',
-                range_y=[0, 100],
-                text_auto='.1f',
-                labels={'Heure': 'Schedule (Time)'}
+            # Gráfico Comparativo
+            st.write("---")
+            col_chart1, col_chart2 = st.columns(2)
+            
+            with col_chart1:
+                st.subheader("👥 Actividad por Alianza")
+                fig_act = px.bar(
+                    df_week_filtered.groupby(['Alliance', 'Status']).size().reset_index(name='Cant'),
+                    x="Alliance", y="Cant", color="Status", barmode="group",
+                    color_discrete_map={'Activo': '#0052cc', 'Inactivo': '#EF553B'}
+                )
+                st.plotly_chart(fig_act, use_container_width=True)
+                
+            with col_chart2:
+                st.subheader("⏰ Jugadores Activos por Hora")
+                hourly_act = df_week_filtered[df_week_filtered['Score'] > 0].groupby(['Heure', 'Alliance']).size().reset_index(name='Activos')
+                fig_hour = px.line(hourly_act, x='Heure', y='Activos', color='Alliance', markers=True)
+                st.plotly_chart(fig_hour, use_container_width=True)
+
+        else:
+            st.warning("No hay datos para las alianzas seleccionadas en esta semana.")
+
+        # ==========================================
+        # SECCIÓN 2: RENDIMIENTO HISTÓRICO (TEMPORADA)
+        # ==========================================
+        st.divider()
+        st.header("2. Rendimiento de Temporada (Global)")
+        
+        # Datos a nivel de partida (Unicos por Fecha, Alianza, Legión y Hora)
+        match_level_df = df_filtered[['Date', 'Alliance', 'Legion', 'Heure', 'Is_Win']].drop_duplicates()
+
+        col_win1, col_win2 = st.columns([1, 1])
+
+        with col_win1:
+            st.subheader("🏆 Winrate por Alianza")
+            alliance_winrate = match_level_df.groupby('Alliance').agg(
+                Partidas=('Is_Win', 'count'),
+                Victorias=('Is_Win', 'sum')
+            ).reset_index()
+            alliance_winrate['Winrate'] = (alliance_winrate['Victorias'] / alliance_winrate['Partidas']) * 100
+            
+            st.dataframe(
+                alliance_winrate.style.format({'Winrate': '{:.1f}%'})
+                .background_gradient(subset=['Winrate'], cmap='RdYlGn', vmin=0, vmax=100),
+                use_container_width=True, hide_index=True
             )
-            fig_winrate.update_layout(coloraxis_showscale=False)
-            st.plotly_chart(fig_winrate, use_container_width=True)
 
-        # --- WINRATE POR LEGION (Matriz) ---
-        st.subheader("🕰️ Detailed Matrix: Winrate by Legion & Time")
-        st.caption("Percentage of victories breakdown.")
-        
-        schedule_winrate = match_level_df.pivot_table(
-            index='Legion', columns='Heure', values='Is_Win', aggfunc='mean'
-        ) * 100
-
-        st.dataframe(
-            schedule_winrate.style.format('{:.1f}%')
-            .background_gradient(cmap='RdYlGn', vmin=0, vmax=100, axis=None)
-            .highlight_null(color='lightgrey'),
-            use_container_width=True
-        )
+        with col_win2:
+            st.subheader("🕰️ Winrate por Horario")
+            time_winrate = match_level_df.groupby('Heure').agg(
+                Partidas=('Is_Win', 'count'),
+                Victorias=('Is_Win', 'sum')
+            ).reset_index()
+            time_winrate['Winrate'] = (time_winrate['Victorias'] / time_winrate['Partidas']) * 100
+            
+            fig_time_win = px.bar(time_winrate, x='Heure', y='Winrate', color='Winrate', color_continuous_scale='RdYlGn')
+            st.plotly_chart(fig_time_win, use_container_width=True)
 
         # ==========================================
-        # 3. INDIVIDUAL PLAYER SUMMARY (GLOBAL)
+        # SECCIÓN 3: ESTADÍSTICAS INDIVIDUALES
         # ==========================================
         st.divider()
-        st.header("3. Individual Player Activity (Global History)")
-        st.caption("These statistics are cumulative (All Time).")
-
-        def calculate_win_rate_player(series):
-            wins = series.apply(lambda x: 1 if 'Victory' in str(x) else 0).sum()
-            total = len(series)
-            return round((wins / total) * 100, 2) if total > 0 else 0
-        def get_preferred_schedule(series):
-            return series.mode()[0] if not series.mode().empty else "N/A"
-
-        player_stats = df.groupby('Joueur').agg(
+        st.header("3. Actividad Individual de Jugadores")
+        
+        player_stats = df_filtered.groupby(['Joueur', 'Alliance']).agg(
             Total_Score=('Score', 'sum'),
-            Average_Score=('Score', 'mean'),
-            Win_Rate=('Result', calculate_win_rate_player),
-            Participations=('Score', lambda x: (x > 0).sum()),
-            Absences=('Score', lambda x: (x == 0).sum()),
-            Preferred_Schedule=('Heure', get_preferred_schedule)
-        ).reset_index()
-        player_stats['Average_Score'] = player_stats['Average_Score'].round(2)
-        
+            Media_Score=('Score', 'mean'),
+            Participaciones=('Score', lambda x: (x > 0).sum()),
+            Horario_Pref=('Heure', lambda x: x.mode().iloc[0] if not x.mode().empty else "-")
+        ).reset_index().sort_values('Total_Score', ascending=False)
+
         st.dataframe(
-            player_stats.style.format({
-                'Total_Score': lambda x: f"{x:,.0f}".replace(",", " "),
-                'Average_Score': lambda x: f"{x:,.2f}".replace(",", " "),
-                'Win_Rate': '{:.2f}', 'Participations': '{:.0f}', 'Absences': '{:.0f}'
-            }), use_container_width=True
+            player_stats.style.format({'Total_Score': '{:,.0f}', 'Media_Score': '{:,.1f}'}),
+            use_container_width=True, hide_index=True
         )
 
-        # --- GLOBAL HOURLY CHART ---
-        st.subheader("🌍 Total Participation by Schedule (Global)")
-        global_hourly_stats = df[df['Score'] > 0].groupby('Heure').size().reset_index(name='Active_Players')
-        fig_global_hourly = px.bar(
-            global_hourly_stats, x='Heure', y='Active_Players',
-            title="Sum of Active Participations by Hour (All Time)",
-            labels={'Active_Players': 'Total Participations'},
-            color_discrete_sequence=['#AB63FA'], text='Active_Players'
-        )
-        fig_global_hourly.update_traces(textposition='outside')
-        st.plotly_chart(fig_global_hourly, use_container_width=True)
-
-        # --- SCHEDULE MATRIX ---
-        st.subheader("🕰️ Active Participation by Schedule Matrix")
-        active_global_df = df[df['Score'] > 0]
-        schedule_pivot = active_global_df.pivot_table(
-            index='Joueur', columns='Heure', values='Score', aggfunc='count', fill_value=0
-        )
-        schedule_pivot['TOTAL'] = schedule_pivot.sum(axis=1)
-        schedule_pivot = schedule_pivot.sort_values('TOTAL', ascending=False)
-        st.dataframe(schedule_pivot, use_container_width=True)
-
         # ==========================================
-        # 4. RAW DATA SECTION
-        # ==========================================
-        st.divider()
-        st.header("4. Raw Data")
-        with st.expander("📂 Click to see raw data from Excel"):
-            st.dataframe(df)
-
-        # ==========================================
-        # --- SIDEBAR: EXPORTS ---
+        # EXPORTACIÓN
         # ==========================================
         st.sidebar.divider()
-        st.sidebar.header("📥 Download Reports")
+        st.sidebar.header("📥 Descargar Reportes")
         
-        # --- 1. WEEKLY REPORT ---
-        buffer_week = io.BytesIO()
-        with pd.ExcelWriter(buffer_week, engine='xlsxwriter') as writer:
-            final_summary_table.to_excel(writer, sheet_name='Summary', index=False)
-            df_active.to_excel(writer, sheet_name='Active', index=False)
-            df_inactive.to_excel(writer, sheet_name='Inactive', index=False)
-            weekly_hourly_stats.to_excel(writer, sheet_name='Hourly_Stats', index=False)
-            df_week_filtered.to_excel(writer, sheet_name='Raw_Data', index=False)
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            if not df_week_filtered.empty: summary_table.to_excel(writer, sheet_name='Resumen_Semanal', index=False)
+            alliance_winrate.to_excel(writer, sheet_name='Winrate_Alianzas', index=False)
+            player_stats.to_excel(writer, sheet_name='Stats_Jugadores', index=False)
             
         st.sidebar.download_button(
-            label="📄 Download Weekly Report",
-            data=buffer_week,
-            file_name=f"Weekly_Report_{selected_week.replace(' ', '_').replace('(', '').replace(')', '')}.xlsx",
-            mime="application/vnd.ms-excel"
-        )
-
-        # --- 2. GLOBAL REPORT ---
-        # CORRECCIÓN AQUÍ: Usamos time_season_stats en vez de legion_season_stats
-        buffer_global = io.BytesIO()
-        with pd.ExcelWriter(buffer_global, engine='xlsxwriter') as writer:
-            time_season_stats.to_excel(writer, sheet_name='Schedule_Winrates', index=False) # <--- CORREGIDO
-            schedule_winrate.to_excel(writer, sheet_name='Winrate_by_Time')
-            player_stats.to_excel(writer, sheet_name='Global_Stats', index=False)
-            schedule_pivot.to_excel(writer, sheet_name='Schedule_Matrix')
-            global_hourly_stats.to_excel(writer, sheet_name='Global_Hourly', index=False)
-            df.to_excel(writer, sheet_name='Full_History_Raw', index=False)
-
-        st.sidebar.download_button(
-            label="💾 Download Full History",
-            data=buffer_global,
-            file_name="Legion_Global_History.xlsx",
+            label="💾 Descargar Excel Completo",
+            data=buffer,
+            file_name=f"Reporte_Alianzas_{selected_week}.xlsx",
             mime="application/vnd.ms-excel"
         )
 
     except Exception as e:
-        st.error(f"Error processing the file: {e}")
-
+        st.error(f"Error al procesar el archivo: {e}")
 else:
-    st.info("Please upload an Excel file in the sidebar to begin.")
+    st.info("Por favor, sube el archivo Excel en la barra lateral para comenzar.")
+
