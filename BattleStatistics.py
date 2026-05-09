@@ -5,40 +5,34 @@ import io
 import re
 
 # ==========================================
-# CONFIGURACIÓN DE LA PÁGINA
+# PAGE CONFIGURATION
 # ==========================================
-st.set_page_config(page_title="BOD Activity Tracker v11", layout="wide")
+st.set_page_config(page_title="BOD Activity Tracker v12", layout="wide")
 
-st.sidebar.title("🛡️ Panel de Control BOD")
-st.title("📊 Reporte de Actividad Battle of Dawn")
-st.markdown("Motor de búsqueda universal optimizado para múltiples columnas y legiones.")
+st.sidebar.title("🛡️ BOD Control Panel")
+st.title("📊 Battle of Dawn Activity Report")
+st.markdown("Universal search engine optimized for multiple columns and legions.")
 
 # ==========================================
-# 1. FUNCIÓN DE PROCESAMIENTO (ESCÁNER UNIVERSAL)
+# 1. PROCESSING FUNCTION (UNIVERSAL SCANNER)
 # ==========================================
 def process_bod_file(uploaded_file):
-    # Leemos todo el archivo como texto para evitar errores de formato
     raw_df = pd.read_excel(uploaded_file, sheet_name="BOD", header=None, dtype=str)
     
     all_data = []
     legion_pattern = r"^LEGI[OÓ]N\s*[1-5]$"
-    # Palabras clave que NO son alianzas (para evitar falsos positivos)
     invalid_alliances = {"SCORE", "RANK", "DATE", "TOTAL", "TBD", "UTC", "PLAYER", "NAN"}
     
-    # Recorremos cada celda del Excel buscando legiones
     for r in range(raw_df.shape[0]):
         for c in range(raw_df.shape[1]):
             cell_val = str(raw_df.iloc[r, c]).strip().upper()
             
             if re.match(legion_pattern, cell_val):
-                # ¡Encontramos una tabla de Legión!
                 legion_name = str(raw_df.iloc[r, c]).strip()
                 
-                # Datos de cabecera
                 date_val = str(raw_df.iloc[r, c+1]).strip() if c+1 < raw_df.shape[1] else "TBD"
                 hour_val = str(raw_df.iloc[r, c+2]).strip() if c+2 < raw_df.shape[1] else "TBD"
                 
-                # Limpieza de Fecha y Hora
                 date_clean = date_val.split(" ")[0].replace("-", "/") if date_val.lower() != "nan" else "TBD"
                 if hour_val.lower() == "nan": 
                     hour_clean = "TBD"
@@ -46,13 +40,11 @@ def process_bod_file(uploaded_file):
                     h_num = hour_val.split(".")[0]
                     hour_clean = f"{h_num} UTC" if "UTC" not in h_num.upper() else h_num
 
-                # Búsqueda de Alianza: Escaneamos hacia ARRIBA revisando TODA LA FILA
                 alliance_name = "Default"
                 for search_r in range(r - 1, -1, -1):
                     found = False
                     for search_c in range(raw_df.shape[1]):
                         potential = str(raw_df.iloc[search_r, search_c]).strip().upper()
-                        # Si tiene entre 2 y 5 letras, es solo texto y no es una palabra inválida, es la Alianza
                         if 2 <= len(potential) <= 5 and potential.isalpha() and potential not in invalid_alliances:
                             alliance_name = str(raw_df.iloc[search_r, search_c]).strip().upper()
                             found = True
@@ -60,7 +52,6 @@ def process_bod_file(uploaded_file):
                     if found:
                         break
                 
-                # Extracción de Jugadores: Escaneamos hacia ABAJO desde r+2
                 for k in range(r + 2, raw_df.shape[0]):
                     rank_cell = str(raw_df.iloc[k, c]).strip().split('.')[0]
                     player_cell = str(raw_df.iloc[k, c+1]).strip() if c+1 < raw_df.shape[1] else "nan"
@@ -68,7 +59,7 @@ def process_bod_file(uploaded_file):
                     
                     if rank_cell.lower() == "nan" or rank_cell == "": break
                     if not rank_cell.isdigit(): continue
-                    if player_cell.lower() in ["nan", "", "player", "joueur"]: continue
+                    if player_cell.lower() in ["nan", "", "player", "joueur", "jugador"]: continue
                     
                     try:
                         score = float(score_cell.replace(" ", "").replace(",", ""))
@@ -88,36 +79,35 @@ def process_bod_file(uploaded_file):
     return pd.DataFrame(all_data)
 
 # ==========================================
-# 2. CARGA Y FILTROS
+# 2. DATA LOADING & FILTERS
 # ==========================================
-uploaded_file = st.sidebar.file_uploader("📂 Subir Excel (Pestaña BOD)", type=['xlsx', 'xlsm'])
+uploaded_file = st.sidebar.file_uploader("📂 Upload Excel (BOD Sheet)", type=['xlsx', 'xlsm'])
 
 if uploaded_file is not None:
     try:
         df = process_bod_file(uploaded_file)
         
         if df.empty:
-            st.error("⚠️ No se detectaron datos. Revisa el formato.")
+            st.error("⚠️ No data detected. Please check the format.")
             st.stop()
 
         total_events = df['Date'].nunique()
-
         alliances = sorted(df['Alliance'].unique())
-        sel_alliances = st.sidebar.multiselect("🛡️ Alianzas:", alliances, default=alliances)
+        sel_alliances = st.sidebar.multiselect("🛡️ Alliances:", alliances, default=alliances)
         
         dates = sorted(df['Date'].unique(), reverse=True)
-        sel_dates = st.sidebar.multiselect("📅 Seleccionar Fechas:", dates, default=dates[:2])
+        sel_dates = st.sidebar.multiselect("📅 Select Dates:", dates, default=dates[:1])
 
         if not sel_dates:
-            st.warning("Selecciona al menos una fecha para ver el resumen.")
+            st.warning("Select at least one date to view the summary.")
             st.stop()
 
         df_filtered = df[(df['Alliance'].isin(sel_alliances)) & (df['Date'].isin(sel_dates))]
 
         # ==========================================
-        # SECCIÓN 1: RESUMEN DE ACTIVIDAD
+        # SECTION 1: ACTIVITY SUMMARY & CHART
         # ==========================================
-        st.header(f"1. Resumen Semanal")
+        st.header("1. Weekly Summary")
         
         if not df_filtered.empty:
             summary = df_filtered.groupby(['Alliance', 'Legion', 'Schedule']).agg(
@@ -131,7 +121,6 @@ if uploaded_file is not None:
 
             summary = summary.merge(status_counts[['Alliance', 'Legion', 'Schedule', 'Active', 'Inactive']], on=['Alliance', 'Legion', 'Schedule'])
             summary['% Participation'] = (summary['Active'] / summary['Total_Players']) * 100
-
             summary = summary[['Alliance', 'Legion', 'Schedule', 'Total_Players', 'Active', 'Inactive', 'Total_Score', '% Participation']]
 
             st.dataframe(
@@ -139,33 +128,75 @@ if uploaded_file is not None:
                 use_container_width=True, hide_index=True
             )
 
-            # --- GRÁFICA CON SELECTOR ---
-            st.subheader("📊 Comparativa de Actividad")
+            st.subheader("📊 Activity Comparison")
             if len(sel_alliances) > 0:
-                chart_alliance = st.selectbox("Selecciona Alianza para la gráfica:", sel_alliances)
+                chart_alliance = st.selectbox("Select Alliance for the visual reports:", sel_alliances)
                 
                 chart_data = df_filtered[df_filtered['Alliance'] == chart_alliance].groupby(['Legion', 'Status']).size().reset_index(name='Count')
                 
                 if not chart_data.empty:
                     fig = px.bar(
                         chart_data, x="Legion", y="Count", color="Status",
-                        title=f"Jugadores Activos vs Inactivos - {chart_alliance}",
+                        title=f"Active vs Inactive Players - {chart_alliance}",
                         barmode="group",
                         color_discrete_map={'Active': '#2ECC71', 'Inactive': '#E74C3C'},
                         text_auto=True
                     )
                     st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info(f"No hay datos para {chart_alliance}.")
+
+            # ==========================================
+            # NEW: DETAILED PLAYER LISTS BY LEGION
+            # ==========================================
+            st.divider()
+            st.header(f"📋 Detailed Player Lists by Legion ({chart_alliance})")
+            
+            # Filter by the alliance selected for the chart
+            df_detailed = df_filtered[df_filtered['Alliance'] == chart_alliance]
+            legions_list = sorted(df_detailed['Legion'].unique())
+            
+            if legions_list:
+                # Create as many columns as there are Legions
+                cols = st.columns(len(legions_list))
+                
+                for idx, legion in enumerate(legions_list):
+                    with cols[idx]:
+                        legion_subset = df_detailed[df_detailed['Legion'] == legion]
+                        schedule = legion_subset['Schedule'].iloc[0]
+                        
+                        # Style Header
+                        st.markdown(f"### {legion}")
+                        st.caption(f"🕒 {schedule}")
+                        
+                        # Active List
+                        active_players = legion_subset[legion_subset['Status'] == 'Active']['Player'].tolist()
+                        st.markdown(f"✅ **Active Players** ({len(active_players)})")
+                        if active_players:
+                            # Using a small code block or list for clarity
+                            active_str = "\n".join([f"• {p}" for p in active_players])
+                            st.markdown(f"<div style='color: #2ECC71; font-size: 0.9em;'>{active_str}</div>", unsafe_allow_html=True)
+                        else:
+                            st.write("None")
+                        
+                        st.write("") # Spacer
+                        
+                        # Inactive List
+                        inactive_players = legion_subset[legion_subset['Status'] == 'Inactive']['Player'].tolist()
+                        st.markdown(f"❌ **Inactive Players** ({len(inactive_players)})")
+                        if inactive_players:
+                            inactive_str = "\n".join([f"• {p}" for p in inactive_players])
+                            st.markdown(f"<div style='color: #E74C3C; font-size: 0.9em; opacity: 0.8;'>{inactive_str}</div>", unsafe_allow_html=True)
+                        else:
+                            st.write("None")
+            else:
+                st.info("No data available for the detailed lists.")
 
         # ==========================================
-        # SECCIÓN 2: RANKING DE TEMPORADA
+        # SECTION 2: SEASON RANKING
         # ==========================================
         st.divider()
-        st.header("2. Perfil de Jugadores (Acumulado)")
+        st.header("2. Season Player Ranking")
         
         player_base = df[df['Alliance'].isin(sel_alliances)]
-        
         if not player_base.empty:
             p_ranking = player_base.groupby(['Player', 'Alliance']).agg(
                 Total_Score=('Score', 'sum'),
@@ -182,7 +213,7 @@ if uploaded_file is not None:
             )
 
         # ==========================================
-        # EXPORTACIÓN
+        # EXPORTS
         # ==========================================
         st.sidebar.divider()
         buffer = io.BytesIO()
@@ -190,9 +221,9 @@ if uploaded_file is not None:
             if not df_filtered.empty: summary.to_excel(writer, sheet_name='Summary', index=False)
             if not player_base.empty: p_ranking.to_excel(writer, sheet_name='Ranking', index=False)
             
-        st.sidebar.download_button("📥 Descargar Excel", buffer, "BOD_Report.xlsx")
+        st.sidebar.download_button("📥 Download Excel", buffer, "BOD_Report.xlsx")
 
     except Exception as e:
         st.error(f"Error: {e}")
 else:
-    st.info("Sube tu archivo Excel para comenzar.")
+    st.info("Upload your Excel file to begin.")
