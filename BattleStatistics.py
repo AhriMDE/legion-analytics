@@ -6,17 +6,17 @@ import io
 # ==========================================
 # PAGE CONFIGURATION
 # ==========================================
-st.set_page_config(page_title="BOD Activity Tracker v7", layout="wide")
+st.set_page_config(page_title="BOD Activity Tracker v9", layout="wide")
 
 st.sidebar.title("🛡️ BOD Control Panel")
 st.title("📊 Battle of Dawn (BOD) Activity Report")
-st.markdown("Activity tracking optimized for exact column mapping.")
+st.markdown("Activity tracking optimized for exact column mapping and multiple dates.")
 
 # ==========================================
-# 1. PROCESSING FUNCTION (COLUMN-STRICT LOGIC)
+# 1. PROCESSING FUNCTION (BULLETPROOF LOGIC)
 # ==========================================
 def process_bod_file(uploaded_file):
-    # dtype=str forces Pandas to read everything as text, avoiding decimal errors like 1 -> 1.0
+    # dtype=str forces Pandas to read everything as text
     raw_df = pd.read_excel(uploaded_file, sheet_name="BOD", header=None, dtype=str)
     
     all_data = []
@@ -35,32 +35,46 @@ def process_bod_file(uploaded_file):
         if col_a.lower() == "nan" and col_b.lower() == "nan":
             continue
 
-        # 1. Detectar Alianza (Está en la Columna A, y la B está vacía)
+        # 1. Detectar Alianza (Col A tiene el nombre corto, Col B está vacía)
         if 2 <= len(col_a) <= 5 and col_a.isalpha() and col_a.isupper() and col_b.lower() == "nan":
             current_alliance = col_a
             continue
 
-        # 2. Detectar Encabezado de Legión (Está en la Columna A y empieza con "Legion")
-        if col_a.upper().startswith("LEGION"):
-            current_legion = col_a
-            current_date = col_b if col_b.lower() != "nan" else "TBD"
+        # 2. Detectar Encabezado de Legión (Inmune a acentos)
+        col_a_norm = col_a.upper().replace("Ó", "O").replace("É", "E")
+        
+        if col_a_norm.startswith("LEGION"):
+            current_legion = col_a # Guarda el nombre original
             
-            # Leer el horario en la Columna C. Si solo es un número (ej. "1"), le añadimos "UTC"
+            # Limpiar Fecha (Toma solo la parte de la fecha)
+            raw_date = col_b if col_b.lower() != "nan" else "TBD"
+            if len(raw_date) >= 10:
+                current_date = raw_date[:10].replace("-", "/")
+            else:
+                current_date = raw_date
+            
+            # Limpiar Horario (Convierte "1.0" o "1" en "1 UTC")
             sched = col_c if col_c.lower() != "nan" else "TBD"
+            if sched.endswith(".0"):
+                sched = sched[:-2] 
+                
             if sched.isdigit():
                 sched = f"{sched} UTC"
+            elif "UTC" not in sched.upper() and sched != "TBD":
+                sched = f"{sched} UTC"
+                
             current_schedule = sched
             continue
 
         # 3. Detectar Filas de Jugadores
-        # La columna A debe ser el Rank (un número). Limpiamos el ".0" oculto si lo hay.
         clean_rank = col_a.split('.')[0]
         
-        if clean_rank.isdigit() and col_b.lower() != "nan" and col_b.lower() != "player":
+        invalid_headers = ["player", "joueur", "jugador", "rank", "date", "rango", "score", "puntuación", "puntuacion"]
+        
+        if clean_rank.isdigit() and col_b.lower() != "nan" and col_b.lower() not in invalid_headers:
             player_name = col_b
             score_str = col_c
             
-            # Limpiar y convertir la puntuación
             if score_str.lower() == "nan" or score_str == "":
                 score = 0.0
             else:
@@ -102,14 +116,21 @@ if uploaded_file is not None:
         sel_alliances = st.sidebar.multiselect("🛡️ Alliances:", alliances, default=alliances)
         
         dates = sorted(df['Date'].unique(), reverse=True)
-        sel_date = st.sidebar.selectbox("📅 Select Date:", dates)
+        # Seleccionamos por defecto las dos fechas más recientes (ideal para eventos de fin de semana)
+        default_dates = dates[:2] if len(dates) >= 2 else dates
+        
+        # ¡CAMBIO CLAVE AQUÍ! Ahora es multiselect
+        sel_dates = st.sidebar.multiselect("📅 Select Dates (Choose multiple for weekends):", dates, default=default_dates)
 
-        df_filtered = df[(df['Alliance'].isin(sel_alliances)) & (df['Date'] == sel_date)]
+        # Filtramos por las fechas seleccionadas
+        df_filtered = df[(df['Alliance'].isin(sel_alliances)) & (df['Date'].isin(sel_dates))]
 
         # ==========================================
         # SECTION 1: WEEKLY SUMMARY
         # ==========================================
-        st.header(f"1. Event Summary: {sel_date}")
+        # Unimos las fechas para el título
+        dates_title = ", ".join(sel_dates)
+        st.header(f"1. Event Summary: {dates_title}")
         
         if not df_filtered.empty:
             # Base table
