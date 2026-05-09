@@ -94,6 +94,10 @@ if uploaded_file is not None:
         # Apply Filters
         df_filtered = df[(df['Alliance'].isin(sel_alliances)) & (df['Date_Range'] == sel_range)]
 
+        # --- SAFETY NETS (Initialize empty dataframes) ---
+        summary = pd.DataFrame()
+        p_stats = pd.DataFrame()
+
         # ==========================================
         # SECTION 1: EVENT SUMMARY
         # ==========================================
@@ -140,16 +144,18 @@ if uploaded_file is not None:
         
         # Winrate by hour
         match_data = df[['Alliance', 'Hour', 'Is_Win', 'Date_Range']].drop_duplicates()
-        hourly_win = match_data.groupby('Hour').agg(
-            Matches=('Is_Win', 'count'),
-            Wins=('Is_Win', 'sum')
-        ).reset_index()
-        hourly_win['Winrate'] = (hourly_win['Wins'] / hourly_win['Matches']) * 100
+        
+        if not match_data.empty:
+            hourly_win = match_data.groupby('Hour').agg(
+                Matches=('Is_Win', 'count'),
+                Wins=('Is_Win', 'sum')
+            ).reset_index()
+            hourly_win['Winrate'] = (hourly_win['Wins'] / hourly_win['Matches']) * 100
 
-        fig_h = px.bar(hourly_win, x='Hour', y='Winrate', color='Winrate', 
-                       title="Win Probability by Time of Day",
-                       color_continuous_scale='RdYlGn', text_auto='.1f')
-        st.plotly_chart(fig_h, use_container_width=True)
+            fig_h = px.bar(hourly_win, x='Hour', y='Winrate', color='Winrate', 
+                           title="Win Probability by Time of Day",
+                           color_continuous_scale='RdYlGn', text_auto='.1f')
+            st.plotly_chart(fig_h, use_container_width=True)
 
         # ==========================================
         # SECTION 3: PLAYER DETAILS
@@ -157,13 +163,14 @@ if uploaded_file is not None:
         st.divider()
         st.header("3. Player Ranking (Season)")
         
-        p_stats = df[df['Alliance'].isin(sel_alliances)].groupby(['Player', 'Alliance']).agg(
-            Total_Points=('Score', 'sum'),
-            Average_Score=('Score', 'mean'),
-            Attendances=('Status', lambda x: (x == 'Active').sum())
-        ).reset_index().sort_values('Total_Points', ascending=False)
+        if not df[df['Alliance'].isin(sel_alliances)].empty:
+            p_stats = df[df['Alliance'].isin(sel_alliances)].groupby(['Player', 'Alliance']).agg(
+                Total_Points=('Score', 'sum'),
+                Average_Score=('Score', 'mean'),
+                Attendances=('Status', lambda x: (x == 'Active').sum())
+            ).reset_index().sort_values('Total_Points', ascending=False)
 
-        st.dataframe(p_stats.head(20), use_container_width=True, hide_index=True)
+            st.dataframe(p_stats.head(20), use_container_width=True, hide_index=True)
 
         # ==========================================
         # SIDEBAR: EXPORTS
@@ -173,9 +180,11 @@ if uploaded_file is not None:
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            if not df_filtered.empty:
+            # Only save the tables if they were actually created
+            if not summary.empty:
                 summary.to_excel(writer, sheet_name='Summary', index=False)
-            p_stats.to_excel(writer, sheet_name='Player_Ranking', index=False)
+            if not p_stats.empty:
+                p_stats.to_excel(writer, sheet_name='Player_Ranking', index=False)
             df.to_excel(writer, sheet_name='Raw_Data', index=False)
             
         st.sidebar.download_button("💾 Download BOD Report", buffer, "BOD_Report.xlsx")
