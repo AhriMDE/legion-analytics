@@ -11,13 +11,13 @@ st.set_page_config(page_title="BOD Activity Tracker", layout="wide")
 
 st.sidebar.title("🛡️ BOD Control Panel")
 st.title("📊 Battle of Dawn (BOD) Activity Report")
-st.markdown("Advanced parsing logic that ignores column shifts and empty cells.")
+st.markdown("Advanced parsing logic with strict Legion detection (Anti-Legionalpha protection).")
 
 # ==========================================
-# 1. PROCESSING FUNCTION (BULLETPROOF ROW SCANNER)
+# 1. PROCESSING FUNCTION (STRICT LEGION SCANNER)
 # ==========================================
 def process_bod_file(uploaded_file):
-    # dtype=str forces Pandas to read everything as text, avoiding decimal errors like "1" becoming "1.0"
+    # dtype=str forces Pandas to read everything as text
     raw_df = pd.read_excel(uploaded_file, sheet_name="BOD", header=None, dtype=str)
     
     all_data = []
@@ -26,11 +26,13 @@ def process_bod_file(uploaded_file):
     current_schedule = "TBD"
     current_legion = "Legion 1"
     
-    # Matches dates with dashes or slashes
+    # Patrones estrictos
     date_pattern = r"(\d{4}[/-]\d{1,2}[/-]\d{1,2})"
+    # ESTO ES LA MAGIA: Busca exactamente "LEGION 1" al "5", acepta la "Ó" y espacios.
+    legion_pattern = r"^LEGI[OÓ]N\s*[1-5]$" 
 
     for i, row in raw_df.iterrows():
-        # Get all non-empty cells in the row, reading from left to right (ignores empty columns)
+        # Get all non-empty cells in the row
         cells = [str(val).strip() for val in row if pd.notna(val) and str(val).strip().lower() not in ["nan", ""]]
         
         if not cells:
@@ -39,31 +41,30 @@ def process_bod_file(uploaded_file):
         row_str_upper = " ".join(cells).upper()
 
         # 1. Detect Alliance
-        # If there's exactly 1 cell, it's 2-5 letters long, and all uppercase (e.g., "DL", "KUT")
         if len(cells) == 1 and 2 <= len(cells[0]) <= 5 and cells[0].isalpha() and cells[0].isupper():
             current_alliance = cells[0].upper()
             continue
 
         # 2. Detect Legion Header Row
-        # Looks for Legion, Date, and Schedule in ANY order across the row
-        if "LEGION" in row_str_upper or "LEGIÓN" in row_str_upper:
+        # Ahora solo se activa si alguna celda coincide EXACTAMENTE con "Legion 1", "Legion 2", etc.
+        has_legion_header = any(re.match(legion_pattern, c.upper()) for c in cells)
+
+        if has_legion_header:
             for c in cells:
                 c_up = c.upper()
-                # Clean hidden decimals for hour parsing if Excel read it as a float
                 clean_c = c.split(".")[0] if c.endswith(".0") else c
 
-                if "LEGION" in c_up or "LEGIÓN" in c_up:
-                    current_legion = c
+                if re.match(legion_pattern, c_up):
+                    current_legion = c # Guarda el nombre (ej. Legion 1)
                 elif re.search(date_pattern, c):
                     current_date = re.search(date_pattern, c).group(1).replace("-", "/")
                 elif "UTC" in c_up:
                     current_schedule = c
-                elif clean_c.isdigit(): # Catches single numbers like "1" or "11"
+                elif clean_c.isdigit(): 
                     current_schedule = f"{clean_c} UTC"
             continue
 
         # 3. Detect Player Data
-        # Finds the first cell that is a number (The Rank)
         rank_idx = -1
         for idx, c in enumerate(cells):
             clean_c = c.split(".")[0]
@@ -71,15 +72,14 @@ def process_bod_file(uploaded_file):
                 rank_idx = idx
                 break
                 
-        # If a Rank is found, the next cell is the Player, and the next is the Score
         if rank_idx != -1 and len(cells) > rank_idx + 1:
             clean_rank = cells[rank_idx].split(".")[0]
             player_name = cells[rank_idx + 1]
             
             invalid_words = ["player", "joueur", "jugador", "rank", "date", "score", "utc"]
             
-            # Ensure it's not a header row
-            if player_name.lower() not in invalid_words and "LEGION" not in player_name.upper():
+            # Verificamos que el jugador no sea una palabra inválida Y que NO sea exactamente un nombre de legión
+            if player_name.lower() not in invalid_words and not re.match(legion_pattern, player_name.upper()):
                 score = 0.0
                 if len(cells) > rank_idx + 2:
                     score_str = cells[rank_idx + 2]
