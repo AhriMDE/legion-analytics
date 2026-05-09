@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.express as px
 import io
 import re
-from datetime import datetime
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -15,7 +14,7 @@ st.title("📊 Battle of Dawn (BOD) Report")
 st.markdown("Advanced analytics for multiple alliances based on the new log format.")
 
 # ==========================================
-# 1. PROCESSING FUNCTION (ROBUST LOGIC)
+# 1. PROCESSING FUNCTION (BULLETPROOF LOGIC)
 # ==========================================
 def process_bod_file(uploaded_file):
     # Read the entire "BOD" sheet without headers to process it manually
@@ -25,18 +24,18 @@ def process_bod_file(uploaded_file):
     current_alliance = None
     current_date_range = None
     
-    # Pattern to identify cells like "5/2 to 5/3 DL"
-    header_pattern = r"(\d+/\d+)\s+to\s+(\d+/\d+)\s+(\w+)"
+    # Nuevo buscador: Tolera mayúsculas (To/TO/to), espacios variables y nombres de alianza largos
+    header_pattern = r"(\d+/\d+)\s*to\s*(\d+/\d+)\s+(.+)"
 
     for i, row in raw_df.iterrows():
         # Convert the entire row to a single string to find the header anywhere
         row_str = " ".join([str(val) for val in row if pd.notna(val)])
         
-        # 1. Detect Alliance and Date Range header
-        match = re.search(header_pattern, row_str)
+        # 1. Detect Alliance and Date Range header (re.IGNORECASE hace que ignore mayúsculas)
+        match = re.search(header_pattern, row_str, re.IGNORECASE)
         if match:
             current_date_range = f"{match.group(1)} - {match.group(2)}"
-            current_alliance = match.group(3)
+            current_alliance = match.group(3).strip()
             continue
         
         # 2. Detect start of table (headers row)
@@ -44,7 +43,7 @@ def process_bod_file(uploaded_file):
             continue 
             
         # 3. Extract data if we are inside an alliance block
-        # We check if there is a Player (row[2]) and a Legion (row[5]) to confirm it's a data row
+        # Check if there is a Player (row[2]) and a Legion (row[5]) to confirm it's a data row
         if current_alliance and pd.notna(row[2]) and str(row[2]).strip() != "" and pd.notna(row[5]):
             data_row = {
                 'Alliance': current_alliance,
@@ -58,7 +57,9 @@ def process_bod_file(uploaded_file):
             }
             all_data.append(data_row)
 
-    return pd.DataFrame(all_data)
+    # Red de seguridad: Siempre devolver la tabla con las columnas correctas, aunque esté vacía
+    cols = ['Alliance', 'Date_Range', 'Date', 'Hour', 'Player', 'Score', 'Result', 'Legion']
+    return pd.DataFrame(all_data, columns=cols)
 
 # ==========================================
 # 2. DATA LOADING & FILTERS
@@ -70,7 +71,7 @@ if uploaded_file is not None:
         df = process_bod_file(uploaded_file)
         
         if df.empty:
-            st.error("No data could be extracted. Check that the sheet is named 'BOD' and has the correct format.")
+            st.error("⚠️ No data could be extracted. Check that the sheet is named 'BOD' and headers look like '5/9 to 5/10 DL'.")
             st.stop()
 
         # --- ADDITIONAL CLEANING ---
