@@ -7,14 +7,14 @@ import re
 # ==========================================
 # PAGE CONFIGURATION
 # ==========================================
-st.set_page_config(page_title="BOD Activity Tracker v3", layout="wide")
+st.set_page_config(page_title="BOD Activity Tracker v4", layout="wide")
 
 st.sidebar.title("🛡️ BOD Control Panel")
 st.title("📊 Battle of Dawn (BOD) Activity Report")
-st.markdown("Seguimiento automático de legiones y actividad de jugadores.")
+st.markdown("Seguimiento automático de legiones, horarios y actividad de jugadores.")
 
 # ==========================================
-# 1. PROCESSING FUNCTION (ROBUST AUTO-LEGION)
+# 1. PROCESSING FUNCTION (BULLETPROOF LOGIC)
 # ==========================================
 def process_bod_file(uploaded_file):
     raw_df = pd.read_excel(uploaded_file, sheet_name="BOD", header=None)
@@ -40,7 +40,7 @@ def process_bod_file(uploaded_file):
         if dr_match:
             current_date_range = dr_match.group(1)
             expecting_alliance = True
-            legion_counter = 0 # Reset counter for new block
+            legion_counter = 0 # Reset counter for new date block
             continue
 
         # 2. Detect Alliance
@@ -49,7 +49,7 @@ def process_bod_file(uploaded_file):
             expecting_alliance = False
             continue
 
-        # 3. Detect Schedule & Increment Legion Number
+        # 3. Detect Schedule (UTC)
         if "UTC" in row_str.upper():
             legion_counter += 1
             for c in cells:
@@ -58,13 +58,16 @@ def process_bod_file(uploaded_file):
                     break
             continue
         
-        # 4. Extract Data Rows (0:Rank, 1:Player, 2:Score, 3:Legion-Ignored)
+        # 4. Extract Data Rows (Assuming Col 1 is Player, Col 2 is Score)
         if len(row) >= 3:
-            rank_cell = str(row[0]).strip()
             player_cell = str(row[1]).strip()
             score_cell = str(row[2]).strip()
 
-            if rank_cell.isdigit() and player_cell != "nan" and player_cell != "":
+            # Ignore headers, empty cells, and rows that are actually schedules
+            invalid_players = ["player", "joueur", "nan", "", "date", "rank"]
+            
+            if player_cell.lower() not in invalid_players and "UTC" not in player_cell.upper():
+                # It's a player! Read the score safely
                 try:
                     clean_score = score_cell.replace(" ", "").replace(",", "")
                     score = float(clean_score)
@@ -75,7 +78,7 @@ def process_bod_file(uploaded_file):
                     'Alliance': current_alliance,
                     'Date_Range': current_date_range,
                     'Schedule': current_schedule,
-                    'Legion': f"Legion {legion_counter}", # Auto-numbered
+                    'Legion': f"Legion {legion_counter}",
                     'Player': player_cell,
                     'Score': score,
                     'Status': 'Active' if score > 0 else 'Inactive'
@@ -101,7 +104,7 @@ if uploaded_file is not None:
 
         # Sidebar Filters
         alliances = sorted(df['Alliance'].unique())
-        sel_alliances = st.sidebar.multiselect("🛡️ Alianzas:", alliances, default=alliances)
+        sel_alliances = st.sidebar.multiselect("🛡️ Alianzas globales:", alliances, default=alliances)
         
         date_ranges = sorted(df['Date_Range'].unique(), reverse=True)
         sel_range = st.sidebar.selectbox("📅 Ver Semana Específica:", date_ranges)
@@ -130,7 +133,7 @@ if uploaded_file is not None:
             summary = summary.merge(status_summary[['Alliance', 'Legion', 'Schedule', 'Active', 'Inactive']], on=['Alliance', 'Legion', 'Schedule'])
             summary['% Participation'] = (summary['Active'] / summary['Total_Players']) * 100
 
-            # Reorder for the user's request
+            # Reorder for clarity
             summary = summary[['Alliance', 'Legion', 'Schedule', 'Total_Players', 'Active', 'Inactive', 'Total_Score', '% Participation']]
 
             st.dataframe(
@@ -138,23 +141,29 @@ if uploaded_file is not None:
                 use_container_width=True, hide_index=True
             )
 
-            # --- SINGLE CHART: ACTIVITY PER LEGION ---
+            # --- SINGLE CHART WITH ALLIANCE TOGGLE ---
             st.subheader("📊 Comparativa de Actividad por Legión")
             
-            # Prepare data for stacked bar chart
-            chart_data = df_week.groupby(['Legion', 'Status']).size().reset_index(name='Count')
+            # Selector exclusivo para la gráfica
+            chart_alliance = st.selectbox("🎯 Selecciona la Alianza para ver en la gráfica:", sel_alliances)
             
-            fig = px.bar(
-                chart_data, 
-                x="Legion", 
-                y="Count", 
-                color="Status",
-                title="Distribución de Jugadores Activos vs Inactivos",
-                labels={"Count": "Número de Jugadores", "Legion": "Legión"},
-                barmode="group", # Puedes cambiar a "relative" si prefieres barras apiladas
-                color_discrete_map={'Active': '#2ECC71', 'Inactive': '#E74C3C'}
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            # Filtramos solo la alianza seleccionada para la gráfica
+            chart_data = df_week[df_week['Alliance'] == chart_alliance].groupby(['Legion', 'Status']).size().reset_index(name='Count')
+            
+            if not chart_data.empty:
+                fig = px.bar(
+                    chart_data, 
+                    x="Legion", 
+                    y="Count", 
+                    color="Status",
+                    title=f"Distribución de Jugadores (Activos vs Inactivos) - {chart_alliance}",
+                    labels={"Count": "Número de Jugadores", "Legion": "Legión"},
+                    barmode="group",
+                    color_discrete_map={'Active': '#2ECC71', 'Inactive': '#E74C3C'}
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info(f"No hay datos de la alianza {chart_alliance} para graficar en esta semana.")
 
         # ==========================================
         # SECTION 2: PLAYER RANKING (SEASON)
@@ -184,7 +193,8 @@ if uploaded_file is not None:
         st.sidebar.divider()
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            summary.to_excel(writer, sheet_name='Weekly_Summary', index=False)
+            if not df_week.empty:
+                summary.to_excel(writer, sheet_name='Weekly_Summary', index=False)
             p_ranking.to_excel(writer, sheet_name='Season_Ranking', index=False)
             
         st.sidebar.download_button("📥 Descargar Reporte", buffer, "BOD_Activity_Report.xlsx")
@@ -193,4 +203,5 @@ if uploaded_file is not None:
         st.error(f"Error en el análisis: {e}")
 else:
     st.info("Sube el archivo Excel con la pestaña 'BOD' para comenzar.")
+
 
