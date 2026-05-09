@@ -2,22 +2,21 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import io
-import re
 
 # ==========================================
 # PAGE CONFIGURATION
 # ==========================================
-st.set_page_config(page_title="BOD Activity Tracker v6", layout="wide")
+st.set_page_config(page_title="BOD Activity Tracker v7", layout="wide")
 
 st.sidebar.title("🛡️ BOD Control Panel")
 st.title("📊 Battle of Dawn (BOD) Activity Report")
-st.markdown("Activity tracking optimized for the new simplified Excel format.")
+st.markdown("Activity tracking optimized for exact column mapping.")
 
 # ==========================================
-# 1. PROCESSING FUNCTION (NEW FORMAT LOGIC)
+# 1. PROCESSING FUNCTION (COLUMN-STRICT LOGIC)
 # ==========================================
 def process_bod_file(uploaded_file):
-    # dtype=str prevents Excel from turning Rank 1 into 1.0, keeping everything as plain text
+    # dtype=str forces Pandas to read everything as text, avoiding decimal errors like 1 -> 1.0
     raw_df = pd.read_excel(uploaded_file, sheet_name="BOD", header=None, dtype=str)
     
     all_data = []
@@ -25,60 +24,61 @@ def process_bod_file(uploaded_file):
     current_date = "TBD"
     current_schedule = "TBD"
     current_legion = "Legion 1"
-    
-    date_pattern = r"(\d{4}/\d{1,2}/\d{1,2})"
 
     for i, row in raw_df.iterrows():
-        # Clean and extract non-empty cells
-        cells = [str(val).strip() for val in row if pd.notna(val) and str(val).strip().lower() != "nan"]
+        # Leer estrictamente las columnas A, B y C
+        col_a = str(row[0]).strip()
+        col_b = str(row[1]).strip()
+        col_c = str(row[2]).strip()
         
-        if not cells:
+        # Ignorar filas completamente vacías
+        if col_a.lower() == "nan" and col_b.lower() == "nan":
             continue
 
-        row_str = " ".join(cells).upper()
-
-        # 1. Detect Alliance (If a cell is just "DL" or "KUT" alone in a row)
-        if len(cells) == 1 and 2 <= len(cells[0]) <= 5 and cells[0].isalpha():
-            current_alliance = cells[0].upper()
+        # 1. Detectar Alianza (Está en la Columna A, y la B está vacía)
+        if 2 <= len(col_a) <= 5 and col_a.isalpha() and col_a.isupper() and col_b.lower() == "nan":
+            current_alliance = col_a
             continue
 
-        # 2. Detect Legion, Date, and Schedule in the new header format
-        if "LEGION" in row_str:
-            for c in cells:
-                c_up = c.upper()
-                if "LEGION" in c_up:
-                    current_legion = c
-                elif re.search(date_pattern, c):
-                    current_date = re.search(date_pattern, c).group(1)
-                elif "UTC" in c_up:
-                    current_schedule = c
-            continue # Move to the next row (the table headers)
-
-        # 3. Extract Player Data Rows
-        if len(cells) >= 3:
-            rank_cell = cells[0].split('.')[0] # Clean hidden decimals like "1.0"
-            player_cell = cells[1]
-            score_cell = cells[2]
-
-            invalid_words = ["player", "joueur", "rank", "date"]
+        # 2. Detectar Encabezado de Legión (Está en la Columna A y empieza con "Legion")
+        if col_a.upper().startswith("LEGION"):
+            current_legion = col_a
+            current_date = col_b if col_b.lower() != "nan" else "TBD"
             
-            # If Col A is a number and Col B is not a header word
-            if rank_cell.isdigit() and player_cell.lower() not in invalid_words:
+            # Leer el horario en la Columna C. Si solo es un número (ej. "1"), le añadimos "UTC"
+            sched = col_c if col_c.lower() != "nan" else "TBD"
+            if sched.isdigit():
+                sched = f"{sched} UTC"
+            current_schedule = sched
+            continue
+
+        # 3. Detectar Filas de Jugadores
+        # La columna A debe ser el Rank (un número). Limpiamos el ".0" oculto si lo hay.
+        clean_rank = col_a.split('.')[0]
+        
+        if clean_rank.isdigit() and col_b.lower() != "nan" and col_b.lower() != "player":
+            player_name = col_b
+            score_str = col_c
+            
+            # Limpiar y convertir la puntuación
+            if score_str.lower() == "nan" or score_str == "":
+                score = 0.0
+            else:
                 try:
-                    clean_score = score_cell.replace(" ", "").replace(",", "")
+                    clean_score = score_str.replace(" ", "").replace(",", "")
                     score = float(clean_score)
                 except:
                     score = 0.0
 
-                all_data.append({
-                    'Alliance': current_alliance,
-                    'Date': current_date,
-                    'Schedule': current_schedule,
-                    'Legion': current_legion,
-                    'Player': player_cell,
-                    'Score': score,
-                    'Status': 'Active' if score > 0 else 'Inactive'
-                })
+            all_data.append({
+                'Alliance': current_alliance,
+                'Date': current_date,
+                'Schedule': current_schedule,
+                'Legion': current_legion,
+                'Player': player_name,
+                'Score': score,
+                'Status': 'Active' if score > 0 else 'Inactive'
+            })
 
     return pd.DataFrame(all_data)
 
@@ -198,4 +198,3 @@ if uploaded_file is not None:
         st.error(f"Analysis error: {e}")
 else:
     st.info("Upload the Excel file with the 'BOD' sheet to begin.")
-
