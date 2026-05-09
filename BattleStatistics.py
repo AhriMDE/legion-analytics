@@ -7,7 +7,7 @@ import re
 # ==========================================
 # PAGE CONFIGURATION
 # ==========================================
-st.set_page_config(page_title="BOD Activity Tracker v13", layout="wide")
+st.set_page_config(page_title="BOD Activity Tracker v14", layout="wide")
 
 st.sidebar.title("🛡️ BOD Control Panel")
 st.title("📊 Battle of Dawn Activity Report")
@@ -130,7 +130,7 @@ if uploaded_file is not None:
 
             st.subheader("📊 Activity Comparison")
             if len(sel_alliances) > 0:
-                chart_alliance = st.selectbox("Select Alliance for the visual reports:", sel_alliances)
+                chart_alliance = st.selectbox("Select Alliance for the chart:", sel_alliances)
                 
                 chart_data = df_filtered[df_filtered['Alliance'] == chart_alliance].groupby(['Legion', 'Status']).size().reset_index(name='Count')
                 
@@ -145,55 +145,60 @@ if uploaded_file is not None:
                     st.plotly_chart(fig, use_container_width=True)
 
             # ==========================================
-            # SECTION 1.5: DETAILED PLAYER TABLES
+            # SECTION 1.5: DETAILED PLAYER TABLES (WITH TABS)
             # ==========================================
             st.divider()
-            st.header(f"📋 Detailed Player Lists by Legion ({chart_alliance})")
+            st.header("📋 Detailed Player Lists by Legion")
             
-            df_detailed = df_filtered[df_filtered['Alliance'] == chart_alliance]
-            legions_list = sorted(df_detailed['Legion'].unique())
-            
-            if legions_list:
-                active_dict = {}
-                inactive_dict = {}
+            if len(sel_alliances) > 0:
+                # Create a tab for each selected alliance
+                tabs = st.tabs(sel_alliances)
                 
-                for legion in legions_list:
-                    legion_subset = df_detailed[df_detailed['Legion'] == legion]
-                    schedule = legion_subset['Schedule'].iloc[0] if not legion_subset.empty else ""
-                    
-                    # Clean up the schedule string for the column header
-                    schedule_short = schedule.replace(" UTC", "").replace(":00:00", ":00")
-                    col_name = f"{legion} ({schedule_short})"
-                    
-                    active_players = legion_subset[legion_subset['Status'] == 'Active']['Player'].tolist()
-                    inactive_players = legion_subset[legion_subset['Status'] == 'Inactive']['Player'].tolist()
-                    
-                    active_dict[col_name] = active_players
-                    inactive_dict[col_name] = inactive_players
-                
-                # Pad the lists so they are all the same length (required for DataFrames)
-                max_active = max([len(v) for v in active_dict.values()]) if active_dict else 0
-                for k in active_dict:
-                    active_dict[k].extend([""] * (max_active - len(active_dict[k])))
-                    
-                max_inactive = max([len(v) for v in inactive_dict.values()]) if inactive_dict else 0
-                for k in inactive_dict:
-                    inactive_dict[k].extend([""] * (max_inactive - len(inactive_dict[k])))
-                
-                # Create the DataFrames
-                df_active = pd.DataFrame(active_dict)
-                df_inactive = pd.DataFrame(inactive_dict)
-                
-                # Display side by side
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("✅ **Active Players**")
-                    st.dataframe(df_active, use_container_width=True, hide_index=True)
-                with col2:
-                    st.markdown("💤 **Inactive Players**")
-                    st.dataframe(df_inactive, use_container_width=True, hide_index=True)
+                for idx, alliance in enumerate(sel_alliances):
+                    with tabs[idx]:
+                        df_detailed = df_filtered[df_filtered['Alliance'] == alliance]
+                        legions_list = sorted(df_detailed['Legion'].unique())
+                        
+                        if legions_list:
+                            active_dict = {}
+                            inactive_dict = {}
+                            
+                            for legion in legions_list:
+                                legion_subset = df_detailed[df_detailed['Legion'] == legion]
+                                schedule = legion_subset['Schedule'].iloc[0] if not legion_subset.empty else ""
+                                
+                                schedule_short = schedule.replace(" UTC", "").replace(":00:00", ":00")
+                                col_name = f"{legion} ({schedule_short})"
+                                
+                                active_players = legion_subset[legion_subset['Status'] == 'Active']['Player'].tolist()
+                                inactive_players = legion_subset[legion_subset['Status'] == 'Inactive']['Player'].tolist()
+                                
+                                active_dict[col_name] = active_players
+                                inactive_dict[col_name] = inactive_players
+                            
+                            # Pad the lists so they are all the same length
+                            max_active = max([len(v) for v in active_dict.values()]) if active_dict else 0
+                            for k in active_dict:
+                                active_dict[k].extend([""] * (max_active - len(active_dict[k])))
+                                
+                            max_inactive = max([len(v) for v in inactive_dict.values()]) if inactive_dict else 0
+                            for k in inactive_dict:
+                                inactive_dict[k].extend([""] * (max_inactive - len(inactive_dict[k])))
+                            
+                            df_active = pd.DataFrame(active_dict)
+                            df_inactive = pd.DataFrame(inactive_dict)
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.markdown("✅ **Active Players**")
+                                st.dataframe(df_active, use_container_width=True, hide_index=True)
+                            with col2:
+                                st.markdown("💤 **Inactive Players**")
+                                st.dataframe(df_inactive, use_container_width=True, hide_index=True)
+                        else:
+                            st.info(f"No detailed data available for {alliance} on the selected dates.")
             else:
-                st.info("No data available for the detailed lists.")
+                st.info("Please select at least one alliance in the sidebar.")
 
         # ==========================================
         # SECTION 2: SEASON RANKING
